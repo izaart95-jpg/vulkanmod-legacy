@@ -1,11 +1,6 @@
 package net.vulkanmod.vulkan;
 
-import it.unimi.dsi.fastutil.longs.LongArrayList;
-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import net.vulkanmod.vulkan.memory.MemoryManager;
-import net.vulkanmod.vulkan.queue.CommandPool;
 import net.vulkanmod.vulkan.util.VUtil;
-import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkDevice;
 
@@ -13,100 +8,70 @@ import java.nio.LongBuffer;
 
 import static org.lwjgl.vulkan.VK10.*;
 
-/***
- * Synchronization utility to sync in frame ops that need to be completed before executing main cmd buffer.
- */
 public class Synchronization {
-    private static final int ALLOCATION_SIZE = 50;
+    private static final int allocSize = 10000;
+    private static final LongBuffer fences = MemoryUtil.memAllocLong(allocSize);
+    private static int idx = 0;
 
-    public static final Synchronization INSTANCE = new Synchronization(ALLOCATION_SIZE);
+    // Auto-flush threshold: flush when buffer reaches 90% capacity to prevent overflow
+    private static final int FLUSH_THRESHOLD = (int)(allocSize * 0.9);
 
-    private final LongBuffer fences;
-    private int idx = 0;
+    // Pre-allocated arrays — eliminates new long[] per frame
+    private static final int BATCH_SIZE = 50;
+    private static final long[] batchArray = new long[BATCH_SIZE];
+    private static long[] remainderArray = new long[0]; // sized to match the exact remainder
 
-    private final ObjectArrayList<CommandPool.CommandBuffer> fenceCbs = new ObjectArrayList<>();
+    public synchronized static void addFence(long fence) {
+        // VK_NULL_HANDLE (and the legacy -1 "nothing submitted" marker) must never reach
+        // vkWaitForFences: the driver dereferences the handle and crashes.
+        if (fence == VK_NULL_HANDLE || fence == -1L) return;
 
-    private final LongArrayList semaphores = new LongArrayList();
-    private final ObjectArrayList<CommandPool.CommandBuffer> semaphoreCbs = new ObjectArrayList<>();
-
-    Synchronization(int allocSize) {
-        this.fences = MemoryUtil.memAllocLong(allocSize);
-    }
-
-    public void addCommandBuffer(CommandPool.CommandBuffer commandBuffer) {
-        addCommandBuffer(commandBuffer, false);
-    }
-
-    public synchronized void addCommandBuffer(CommandPool.CommandBuffer commandBuffer, boolean useSemaphore) {
-        if (!useSemaphore) {
-            this.addFence(commandBuffer.getFence());
-            this.fenceCbs.add(commandBuffer);
-        }
-        else {
-            this.semaphores.add(commandBuffer.getSemaphore());
-            this.semaphoreCbs.add(commandBuffer);
-        }
-    }
-
-    public synchronized void addFence(long fence) {
-        if (idx == ALLOCATION_SIZE)
+        // Auto-flush if buffer is near capacity to prevent IndexOutOfBoundsException
+        if (idx >= FLUSH_THRESHOLD) {
             waitFences();
-
+        }
+        // Safety check: if somehow still at capacity after flush, skip this fence
+        if (idx >= allocSize) {
+            return;
+        }
         fences.put(idx, fence);
         idx++;
     }
 
-    public synchronized void waitFences() {
-        if (idx == 0)
+    public synchronized static void waitFences() {
+        if(idx == 0) {
+            TransferQueue.resetCurrent();
             return;
+        }
 
-        VkDevice device = Vulkan.getVkDevice();
+        VkDevice device = Vulkan.getDevice();
+        if (device == null) {
+            idx = 0;
+            return;
+        }
 
-        fences.limit(idx);
+        int i;
+        for (i = 0; i + BATCH_SIZE <= idx; i += BATCH_SIZE) {
+            fences.position(i);
+            fences.get(batchArray, 0, BATCH_SIZE);
+            vkWaitForFences(device, batchArray, true, VUtil.UINT64_MAX);
+        }
+        int remaining = idx - i;
+        if(remaining > 0) {
+            // LWJGL derives fenceCount from the array length, so the array must be exactly
+            // `remaining` long — a longer one would pass trailing VK_NULL_HANDLEs to the driver,
+            // which radv dereferences unconditionally (SIGSEGV in vk_common_WaitForFences).
+            if (remainderArray.length != remaining) {
+                remainderArray = new long[remaining];
+            }
+            fences.position(i);
+            fences.get(remainderArray, 0, remaining);
+            vkWaitForFences(device, remainderArray, true, VUtil.UINT64_MAX);
+        }
 
-        vkWaitForFences(device, fences, true, VUtil.UINT64_MAX);
-
-        this.fenceCbs.forEach(CommandPool.CommandBuffer::reset);
-        this.fenceCbs.clear();
-
-        fences.limit(ALLOCATION_SIZE);
+        fences.position(0);
         idx = 0;
+
+        TransferQueue.resetCurrent();
     }
-
-    public synchronized void addWaitSemaphore(long semaphore) {
-        this.semaphores.add(semaphore);
-    }
-
-    public int getWaitSemaphoreCount() {
-        return this.semaphores.size();
-    }
-
-    public void getWaitSemaphores(LongBuffer buffer) {
-        buffer.put(this.semaphores.elements(), 0, this.semaphores.size());
-
-        this.semaphores.clear();
-    }
-
-    public void scheduleCbReset() {
-        final var frameSemaphoreCbs = this.semaphoreCbs.clone();
-        MemoryManager.getInstance().addFrameOp(
-                () -> {
-                    frameSemaphoreCbs.forEach(CommandPool.CommandBuffer::reset);
-                }
-        );
-
-        this.semaphoreCbs.clear();
-    }
-
-    public static void waitFence(long fence) {
-        VkDevice device = Vulkan.getVkDevice();
-
-        vkWaitForFences(device, fence, true, VUtil.UINT64_MAX);
-    }
-
-    public static boolean checkFenceStatus(long fence) {
-        VkDevice device = Vulkan.getVkDevice();
-        return vkGetFenceStatus(device, fence) == VK_SUCCESS;
-    }
-
 }

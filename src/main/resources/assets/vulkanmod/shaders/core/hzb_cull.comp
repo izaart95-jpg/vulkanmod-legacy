@@ -1,0 +1,81 @@
+#version 450
+
+// Zeroes the instanceCount of chunks the depth pyramid proves are hidden.
+//
+// Editing the indirect commands in place means the CPU never learns the result and never stalls:
+// a command with instanceCount 0 is skipped by the GPU at almost no cost. Chunk bounds come from
+// the per-chunk offsets the batch already uploads, so nothing extra has to be sent.
+layout(local_size_x = 64) in;
+
+struct DrawIndexedIndirectCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+layout(binding = 0, std430) buffer Commands {
+    DrawIndexedIndirectCommand commands[];
+};
+
+layout(binding = 1, std430) readonly buffer Offsets {
+    vec4 chunkOffsets[];
+};
+
+layout(binding = 2) uniform sampler2D depthPyramid;
+
+layout(push_constant) uniform PushConstants {
+    mat4 viewProj;
+    ivec2 pyramidSize;
+    int   commandCount;
+    int   mipLevels;
+};
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(commandCount)) return;
+    if (commands[i].instanceCount == 0u) return;
+
+    // Indexed by command, not by firstInstance: firstInstance is relative to the batch slice the
+    // draw call binds, while this buffer is bound whole from offset zero.
+    vec3 origin = chunkOffsets[i].xyz;
+
+    // Project the section's eight corners and keep the screen rectangle plus the nearest depth.
+    vec2 lo = vec2(1.0), hi = vec2(-1.0);
+    float nearest = 1.0;
+    bool behindNear = false;
+
+    for (int c = 0; c < 8; c++) {
+        vec3 corner = origin + vec3(float(c & 1), float((c >> 1) & 1), float((c >> 2) & 1)) * 16.0;
+        vec4 clip = viewProj * vec4(corner, 1.0);
+        if (clip.w <= 0.0) { behindNear = true; break; }
+
+        vec3 ndc = clip.xyz / clip.w;
+        lo = min(lo, ndc.xy);
+        hi = max(hi, ndc.xy);
+        nearest = min(nearest, ndc.z);
+    }
+
+    // Straddling the near plane makes the projection meaningless; never cull on that.
+    if (behindNear) return;
+
+    vec2 uvLo = lo * 0.5 + 0.5;
+    vec2 uvHi = hi * 0.5 + 0.5;
+
+    // Pick the level where the box covers about two texels, so one fetch of four covers it.
+    vec2 sizePx = (uvHi - uvLo) * vec2(pyramidSize);
+    float level = ceil(log2(max(max(sizePx.x, sizePx.y), 1.0)));
+    level = clamp(level, 0.0, float(mipLevels - 1));
+
+    float d0 = textureLod(depthPyramid, uvLo, level).r;
+    float d1 = textureLod(depthPyramid, vec2(uvHi.x, uvLo.y), level).r;
+    float d2 = textureLod(depthPyramid, vec2(uvLo.x, uvHi.y), level).r;
+    float d3 = textureLod(depthPyramid, uvHi, level).r;
+    float farthest = max(max(d0, d1), max(d2, d3));
+
+    // Everything already drawn in that region is nearer than this chunk's closest point.
+    if (nearest > farthest) {
+        commands[i].instanceCount = 0u;
+    }
+}

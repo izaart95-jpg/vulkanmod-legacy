@@ -1,114 +1,191 @@
 plugins {
-	id 'fabric-loom' version '1.14-SNAPSHOT'
-	id 'maven-publish'
+    id 'fabric-loom' version "1.0-SNAPSHOT"
+    id 'com.github.johnrengelman.shadow' version '7.1.2'
+    id 'maven-publish'
+    id "org.jetbrains.kotlin.jvm" version "1.6.10"
 }
 
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8
+
+archivesBaseName = project.archives_base_name
 version = project.mod_version
 group = project.maven_group
 
-base {
-	archivesName = project.archives_base_name
+repositories {
+    maven {
+        name = "legacy-fabric"
+        url = "https://maven.legacyfabric.net"
+    }
+    maven { url "https://jitpack.io" }
+    mavenCentral()
+}
+
+// Loom adds Mojang's library repository before the repositories declared here.
+// Gradle remembers which repository supplied a module's metadata and then looks
+// for classifier artifacts (the natives) only in that repository.  Mojang does
+// not host the ARM classifier jars, so keep all of org.lwjgl on Maven Central.
+repositories.all { repo ->
+    if (repo instanceof MavenArtifactRepository
+            && repo.url != null
+            && repo.url.toString().contains("libraries.minecraft.net")) {
+        repo.content {
+            excludeGroup "org.lwjgl"
+        }
+    }
 }
 
 loom {
-	accessWidenerPath = file("src/main/resources/vulkanmod.accesswidener")
+    // 1.8.9 is served by Legacy Fabric's intermediary repository.
+    setIntermediaryUrl('https://maven.legacyfabric.net/net/fabricmc/intermediary/%1$s/intermediary-%1$s-v2.jar')
 }
 
+import org.gradle.internal.os.OperatingSystem
+
+project.ext.lwjglVersion = "3.3.1"
+
+// Ship every desktop platform LWJGL publishes natives for.  The old build chose
+// one classifier for the machine that happened to run Gradle, which made the
+// resulting jar Linux-only (or Windows-only, etc.).  A mod jar has to work on
+// whatever machine the player uses, so all of them are bundled.
+project.ext.lwjglNativePlatforms = [
+        "natives-windows",
+        "natives-windows-x86",
+        "natives-windows-arm64",
+        "natives-linux",
+        "natives-linux-arm64",
+        "natives-linux-arm32",
+        "natives-macos",
+        "natives-macos-arm64"
+]
+
 dependencies {
-	// To change the versions see the gradle.properties file
-	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	mappings loom.officialMojangMappings()
-	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.legacyfabric:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
-	// Fabric API.
-	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    implementation("org.jetbrains.kotlin:kotlin-stdlib")
+    implementation("org.jetbrains.kotlin:kotlin-stdlib-common")
+    implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7")
+    implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
 
-	ext.includeModule = { name ->
-		var module = fabricApi.module(name, project.fabric_version)
-		modImplementation(module)
-		include(module)
-	}
+    implementation("org.javassist:javassist:3.29.2-GA")
+    implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
 
-	includeModule("fabric-api-base")
-	includeModule("fabric-resource-loader-v0")
-	includeModule("fabric-resource-loader-v1")
-	includeModule("fabric-rendering-v1")
-	includeModule("fabric-renderer-api-v1")
-	includeModule("fabric-rendering-fluids-v1")
-	includeModule("fabric-block-view-api-v2")
-	includeModule("fabric-lifecycle-events-v1")
-	includeModule("fabric-transitive-access-wideners-v1")
+    implementation "org.lwjgl:lwjgl"
+    implementation "org.lwjgl:lwjgl-glfw"
+    implementation "org.lwjgl:lwjgl-openal"
+    implementation "org.lwjgl:lwjgl-opengl"
+
+    // Vulkan dependencies.
+    implementation "org.lwjgl:lwjgl-vulkan:$lwjglVersion"
+    implementation "org.lwjgl:lwjgl-vma:$lwjglVersion"
+    implementation "org.lwjgl:lwjgl-shaderc:$lwjglVersion"
+    implementation "org.joml:joml:1.10.4"
+
+    // Natives for every supported desktop platform.  Vulkan itself is loaded
+    // from the system driver; only macOS bundles a loader (MoltenVK).
+    for (String platform : project.lwjglNativePlatforms) {
+        runtimeOnly "org.lwjgl:lwjgl:$lwjglVersion:$platform"
+        runtimeOnly "org.lwjgl:lwjgl-glfw:$lwjglVersion:$platform"
+        runtimeOnly "org.lwjgl:lwjgl-openal:$lwjglVersion:$platform"
+        runtimeOnly "org.lwjgl:lwjgl-opengl:$lwjglVersion:$platform"
+        runtimeOnly "org.lwjgl:lwjgl-vma:$lwjglVersion:$platform"
+        runtimeOnly "org.lwjgl:lwjgl-shaderc:$lwjglVersion:$platform"
+    }
+
+    // MoltenVK is the Vulkan implementation on macOS.
+    runtimeOnly "org.lwjgl:lwjgl-vulkan:$lwjglVersion:natives-macos"
+    runtimeOnly "org.lwjgl:lwjgl-vulkan:$lwjglVersion:natives-macos-arm64"
 }
 
-project.ext.lwjglVersion = "3.3.3"
-project.ext.jomlVersion = "1.10.4"
-project.ext.winNatives = "natives-windows"
-project.ext.linuxNatives = "natives-linux"
-project.ext.macosNatives = "natives-macos"
-project.ext.macosArmNatives = "natives-macos-arm64"
-
-dependencies {
-	include(implementation("org.lwjgl:lwjgl-vulkan:$lwjglVersion"))
-
-	ext.includeNatives = { name ->
-		include(implementation("$name:$lwjglVersion"))
-		include(runtimeOnly("$name:$lwjglVersion:$winNatives"))
-		include(runtimeOnly("$name:$lwjglVersion:$linuxNatives"))
-		include(runtimeOnly("$name:$lwjglVersion:$macosNatives"))
-		include(runtimeOnly("$name:$lwjglVersion:$macosArmNatives"))
-	}
-
-	includeNatives("org.lwjgl:lwjgl-vma")
-	includeNatives("org.lwjgl:lwjgl-shaderc")
-	includeNatives("org.lwjgl:lwjgl-spvc")
-
-	//MoltenVK
-	include(runtimeOnly("org.lwjgl:lwjgl-vulkan:$lwjglVersion:$macosNatives"))
-	include(runtimeOnly("org.lwjgl:lwjgl-vulkan:$lwjglVersion:$macosArmNatives"))
+configurations.all {
+    // Keep the legacy LWJGL2 implementation out of the compile/runtime classpath.
+    // Legacy LWJGL3 provides the compatibility shims under org.lwjgl.* instead.
+    exclude group: "org.lwjgl.lwjgl"
 }
 
 processResources {
-	inputs.property "version", project.version
+    inputs.property "version", project.version
 
-	filesMatching("fabric.mod.json") {
-		expand "version": project.version
-	}
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 21
+    it.options.encoding = "UTF-8"
+    if (JavaVersion.current().isJava9Compatible()) it.options.release = 8
+}
+
+compileKotlin {
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
 }
 
 java {
-	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
-	// if it is present.
-	// If you remove this line, sources will not be generated.
-	withSourcesJar()
-
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
+    withSourcesJar()
 }
 
 jar {
-	from("LICENSE") {
-		rename { "${it}_${project.base.archivesName.get()}"}
-	}
+    // The normal jar is not self contained (Kotlin, LWJGL3 and the Vulkan
+    // bindings live in dependencies).  Only the remapped shadow jar is shippable.
+    archiveClassifier = "slim"
 }
 
-// configure the maven publication
-publishing {
-	publications {
-		create("mavenJava", MavenPublication) {
-			artifactId = project.archives_base_name
-			from components.java
-		}
-	}
+shadowJar {
+    archiveClassifier = "shadow"
+    minimize {
+        exclude(dependency("org.lwjgl:lwjgl:$lwjglVersion"))
+        exclude(dependency("org.lwjgl:lwjgl-glfw:$lwjglVersion"))
+        exclude(dependency("org.lwjgl:lwjgl-openal:$lwjglVersion"))
+        exclude(dependency("org.lwjgl:lwjgl-opengl:$lwjglVersion"))
+        exclude(dependency("org.lwjgl:lwjgl-vulkan:$lwjglVersion"))
+        exclude(dependency("org.lwjgl:lwjgl-vma:$lwjglVersion"))
+        exclude(dependency("org.lwjgl:lwjgl-shaderc:$lwjglVersion"))
+        exclude(dependency("org.joml:joml:1.10.4"))
+    }
+    dependencies {
+        include(dependency("org.jetbrains.kotlin:kotlin-stdlib"))
+        include(dependency("org.jetbrains.kotlin:kotlin-stdlib-common"))
+        include(dependency("org.jetbrains.kotlin:kotlin-stdlib-jdk7"))
+        include(dependency("org.jetbrains.kotlin:kotlin-stdlib-jdk8"))
+        include(dependency("org.javassist:javassist:3.29.2-GA"))
 
-	// See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
-	repositories {
-		// Add repositories to publish to here.
-		// Notice: This block does NOT have the same function as the block in the top level.
-		// The repositories here will be used for publishing your artifact, not for
-		// retrieving dependencies.
-	}
+        include(dependency("org.lwjgl:lwjgl:$lwjglVersion"))
+        include(dependency("org.lwjgl:lwjgl-glfw:$lwjglVersion"))
+        include(dependency("org.lwjgl:lwjgl-openal:$lwjglVersion"))
+        include(dependency("org.lwjgl:lwjgl-opengl:$lwjglVersion"))
+        include(dependency("org.lwjgl:lwjgl-vulkan:$lwjglVersion"))
+        include(dependency("org.lwjgl:lwjgl-vma:$lwjglVersion"))
+        include(dependency("org.lwjgl:lwjgl-shaderc:$lwjglVersion"))
+        include(dependency("org.joml:joml:1.10.4"))
+    }
+}
+
+task remapShadowJar(type: net.fabricmc.loom.task.RemapJarTask, dependsOn: shadowJar) {
+    input = shadowJar.archiveFile
+    archiveFileName = "${archivesBaseName}-${project.version}.jar"
+    addNestedDependencies = false
+}
+
+// `build` must produce the installable jar, not only the slim class jar.
+build.dependsOn remapShadowJar
+
+// Keep the normal Loom remap output separate from the installable shadow jar.
+remapJar {
+    archiveClassifier = "slim-remapped"
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+
+    repositories {
+        mavenLocal()
+    }
 }

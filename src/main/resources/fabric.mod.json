@@ -2,35 +2,37 @@
   "schemaVersion": 1,
   "id": "vulkanmod",
   "version": "${version}",
-
   "name": "VulkanMod",
-  "description": "Bring Vulkan to Minecraft!",
+  "description": "A Vulkan renderer for Minecraft 1.8.9. Replaces the OpenGL rendering pipeline with an explicit Vulkan backend, including optimised terrain and entity rendering.",
   "authors": [
-    "Collateral"
+    "Collateral",
+    "VulkanMod contributors",
+    "Zarzelcow (Legacy LWJGL3)",
+    "hopccne (1.8.9 backport)"
   ],
   "contact": {
-    "homepage": "",
-    "sources": "https://github.com/xCollateral/VulkanMod"
+    "homepage": "https://github.com/xCollateral/VulkanMod",
+    "sources": "https://github.com/xCollateral/VulkanMod",
+    "issues": "https://github.com/xCollateral/VulkanMod/issues"
   },
-
+  "license": "LGPL-3.0-only",
   "icon": "assets/vulkanmod/vlogo.png",
-
   "environment": "client",
   "entrypoints": {
+    "main": [
+      "com.github.zarzelcow.legacylwjgl3.LegacyLWJGL3"
+    ],
     "client": [
       "net.vulkanmod.Initializer"
     ]
   },
   "mixins": [
+    "legacy-lwjgl3.mixins.json",
     "vulkanmod.mixins.json"
   ],
-  "accessWidener" : "vulkanmod.accesswidener",
-
   "depends": {
-    "fabricloader": ">=0.14.14",
-    "minecraft": "1.21.11"
-  },
-  "custom": {
-    "fabric-renderer-api-v1:contains_renderer": true
+    "fabricloader": ">=0.14.9",
+    "minecraft": "1.8.9",
+    "java": ">=8"
   }
 }

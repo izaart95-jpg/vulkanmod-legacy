@@ -1,0 +1,347 @@
+# HOP Noncommercial License 1.0.0
+
+Copyright (c) 2026 Héctor Octavio Piccone Pacheco
+
+## Acceptance
+
+In order to receive any license under these terms, you must agree
+to them as both strict obligations and conditions to all your
+licenses.
+
+## Copyright License
+
+The licensor grants you a copyright license for the software to
+do everything you might do with the software that would otherwise
+infringe the licensor's copyright in it, provided that such use
+is for a Permitted Purpose.
+
+However, you may only distribute the software according to the
+Distribution License and make changes or new works based on the
+software according to the Changes and New Works License.
+
+## Distribution License
+
+The licensor grants you an additional copyright license to
+distribute copies of the software and works based on the software,
+provided that:
+
+1. The distribution is for a Noncommercial Purpose;
+2. You do not charge any fee or otherwise receive monetary
+   compensation for the software or derivative work;
+3. You comply with the Notices and Attribution requirements;
+4. You provide recipients with a copy of these terms or the URL
+   for them; and
+5. The distributed software and derivative works are not used to
+   provide or promote a Commercial Product or Commercial Service.
+
+You may distribute the software or derivative works free of charge
+without obtaining additional permission from the licensor, provided
+that all other conditions of this license are satisfied.
+
+## Notices and Attribution
+
+You must ensure that anyone who receives a copy of any part of the
+software from you also receives a copy of these terms or the URL
+for them.
+
+You must preserve all copyright, license, attribution, and other
+legal notices included with the software.
+
+In addition, every distributed copy of the software, and every
+distributed derivative work containing a substantial portion of the
+software, must clearly and reasonably display the following
+attribution:
+
+```
+Original author: Héctor Octavio Piccone Pacheco
+```
+
+The attribution must be presented in a location reasonably visible
+to users of the software, documentation, source repository, or
+distribution, as applicable.
+
+You may not remove, obscure, or alter this attribution in a manner
+that makes the original author difficult to identify.
+
+If the software contains a graphical user interface, the attribution
+may additionally be provided in an About, Credits, Legal, License,
+or equivalent section of that interface.
+
+For source-code distributions, the attribution must remain in the
+source distribution and must not be removed from the relevant
+copyright or license notices.
+
+## Changes and New Works License
+
+The licensor grants you an additional copyright license to make
+changes and create new works based on the software for any
+Permitted Purpose.
+
+You may modify the software, fork it, combine it with other
+software, integrate it into other projects, and create derivative
+works, provided that the resulting use remains a Permitted Purpose.
+
+Derivative works may be distributed under different terms for their
+original material, provided that:
+
+1. The portions derived from the software remain subject to this
+   license;
+2. The attribution requirements of this license are preserved;
+3. The derivative work is not used for a Commercial Purpose; and
+4. Recipients receive the applicable terms governing the portions
+   derived from the software.
+
+You may not use a derivative work to circumvent any restriction
+contained in this license.
+
+## Patent License
+
+The licensor grants you a patent license for the software that
+covers patent claims the licensor can license, or becomes able to
+license, that you would infringe by using the software.
+
+This patent license applies only to Permitted Purposes.
+
+## Noncommercial Purposes
+
+Any purpose that does not constitute a Commercial Purpose is a
+Permitted Purpose.
+
+Noncommercial use includes, without limitation:
+
+* personal use;
+* private projects;
+* hobby projects;
+* educational projects;
+* academic research;
+* experimentation;
+* testing;
+* development;
+* modification;
+* creation of derivative works;
+* public demonstrations;
+* free and open-source software projects; and
+* distribution of the software or derivative works at no charge,
+
+provided that the software is not used directly or indirectly for
+a Commercial Purpose.
+
+The fact that a project is publicly available, popular, large,
+widely distributed, or developed by an individual or organization
+does not by itself make the project commercial.
+
+## Commercial Purposes
+
+A Commercial Purpose means any use of the software, directly or
+indirectly, that is intended to generate, facilitate, support, or
+increase monetary revenue, profit, commercial advantage, or other
+financial benefit.
+
+Without limiting the meaning above, the following are Commercial
+Purposes and are NOT permitted without explicit written
+authorization from the licensor:
+
+1. Selling the software or any derivative work;
+
+2. Charging users for access to the software or any functionality
+   substantially based on the software;
+
+3. Selling, licensing, renting, leasing, or otherwise monetizing
+   access to the software;
+
+4. Including the software in a paid product or service;
+
+5. Using the software in a product or service that generates
+   revenue;
+
+6. Using the software to provide a paid service, hosted service,
+   SaaS, API, platform, application, infrastructure, client,
+   library, framework, or other commercial service;
+
+7. Monetizing a derivative work through subscriptions, memberships,
+   premium features, paid accounts, paid upgrades, paid content,
+   paid downloads, or similar mechanisms;
+
+8. Selling digital or physical goods, features, services,
+   subscriptions, licenses, access, upgrades, or other
+   monetized functionality through software containing the
+   software or substantial portions of it;
+
+9. Integrating advertisements, sponsorships, affiliate links,
+   promotional systems, or other revenue-generating mechanisms
+   into software containing the software;
+
+10. Using the software as part of a commercial product, even when
+    the software itself is distributed free of charge;
+
+11. Using the software to create or operate a free product whose
+    surrounding ecosystem, features, services, or functionality
+    generate revenue;
+
+12. Using the software for commercial development on behalf of
+    another person or organization;
+
+13. Using the software to obtain a commercial advantage for a
+    business or organization; or
+
+14. Structuring a project, product, service, or distribution in
+    any manner primarily intended to obtain a financial benefit
+    while technically avoiding a direct sale of the software.
+
+A project does not become permitted merely because the software
+itself is free.
+
+For example, a free application containing this software is
+permitted if the application is genuinely noncommercial.
+
+However, that same application is not permitted if it monetizes
+access, features, services, advertisements, subscriptions,
+sponsorships, digital goods, physical goods, or any other
+commercial activity, unless the licensor has granted explicit
+written authorization.
+
+## Explicit Commercial Authorization
+
+The licensor may authorize commercial use at their sole discretion.
+
+Commercial use is permitted only when the licensor has provided
+explicit written authorization.
+
+A statement that the licensor has not objected to a commercial use
+does not constitute authorization.
+
+Silence, failure to respond, public availability of the software,
+or knowledge of a commercial use does not constitute authorization.
+
+Authorization may be limited to a particular person, organization,
+product, version, use, territory, duration, or other conditions.
+
+Unless explicitly stated otherwise in writing, authorization for
+one commercial use does not authorize any other commercial use.
+
+## No Circumvention
+
+You may not structure, rename, separate, relocate, repackage, or
+otherwise modify a project for the primary purpose of circumventing
+the Commercial Purpose restrictions of this license.
+
+Combining the software with other software does not remove or
+reduce the restrictions imposed by this license on the portions
+covered by this license.
+
+## Fair Use
+
+You may have rights to use the software under applicable law,
+including fair use or equivalent doctrines.
+
+These terms do not limit rights that cannot legally be restricted.
+
+## No Other Rights
+
+These terms do not grant you any trademark, patent, publicity,
+privacy, or other rights except those expressly stated.
+
+These terms do not allow you to sublicense or transfer your
+licenses to anyone else.
+
+These terms do not prevent the licensor from granting licenses to
+other persons or organizations, including commercial licenses.
+
+The licensor may separately authorize commercial uses under
+different terms.
+
+## Patent Defense
+
+If you make any written claim that the software infringes or
+contributes to infringement of any patent, your patent license for
+the software granted under these terms ends immediately.
+
+If your company makes such a claim, your patent license ends
+immediately for work on behalf of your company.
+
+## Violations
+
+The first time you are notified in writing that you have violated
+any of these terms, or have done anything with the software not
+covered by your licenses, your licenses may continue if you:
+
+1. Come into full compliance with these terms; and
+2. Take practical steps to correct the violation and, where
+   reasonably possible, its effects;
+
+within 32 days of receiving notice.
+
+If you do not fully comply within that period, all your licenses
+under these terms end immediately.
+
+Termination does not limit any other rights or remedies available
+to the licensor under applicable law.
+
+## No Liability
+
+AS FAR AS THE LAW ALLOWS, THE SOFTWARE COMES AS IS, WITHOUT ANY
+WARRANTY OR CONDITION, AND THE LICENSOR WILL NOT BE LIABLE TO YOU
+FOR ANY DAMAGES ARISING OUT OF THESE TERMS OR THE USE OR NATURE
+OF THE SOFTWARE, UNDER ANY KIND OF LEGAL CLAIM.
+
+## Definitions
+
+The **licensor** is the individual or entity offering these terms.
+
+For this license, the licensor is:
+
+```
+Héctor Octavio Piccone Pacheco
+```
+
+The **software** is the software the licensor makes available
+under these terms.
+
+**You** refers to the individual or entity agreeing to these
+terms.
+
+**Your company** is any legal entity, sole proprietorship, or other
+kind of organization that you work for, plus all organizations that
+have control over, are under the control of, or are under common
+control with that organization.
+
+**Control** means ownership of substantially all the assets of an
+entity, or the power to direct its management and policies by vote,
+contract, or otherwise. Control can be direct or indirect.
+
+**Your licenses** are all the licenses granted to you for the
+software under these terms.
+
+**Use** means anything you do with the software requiring one of
+your licenses.
+
+A **Commercial Purpose** means a purpose that is intended to
+generate, facilitate, support, or increase monetary revenue,
+profit, commercial advantage, or other financial benefit.
+
+A **Noncommercial Purpose** means a purpose that is not a
+Commercial Purpose.
+
+A **Permitted Purpose** means a Noncommercial Purpose or any
+Commercial Purpose for which the licensor has provided explicit
+written authorization.
+
+A **derivative work** means a work based on, incorporating,
+modifying, adapting, or otherwise materially incorporating the
+software or a portion of it, to the extent recognized as a
+derivative work under applicable copyright law.
+
+A **Commercial Product** means any product, software, application,
+service, platform, or other offering that is used, distributed,
+provided, or operated for a Commercial Purpose.
+
+A **Commercial Service** means any service, hosted application,
+SaaS, API, platform, infrastructure, or other service provided for
+a Commercial Purpose.
+
+## Copyright
+
+Copyright (c) 2026 Héctor Octavio Piccone Pacheco
+
+All rights reserved except for the rights expressly granted by
+this license.

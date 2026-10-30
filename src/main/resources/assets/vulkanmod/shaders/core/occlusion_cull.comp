@@ -1,0 +1,128 @@
+#version 450
+
+// GPU-driven occlusion culling compute shader.
+// Tests chunk section AABBs against frustum planes extracted from VP matrix.
+// Each invocation tests one section and writes 1 (visible) or 0 (culled).
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Section AABBs: min(x,y,z,pad), max(x,y,z,pad) — 32 bytes per section
+layout(std430, set = 0, binding = 0) readonly buffer AABBBuffer {
+    vec4 aabbs[]; // [i*2] = min, [i*2+1] = max
+};
+
+// Visibility output: 1 uint per section
+layout(std430, set = 0, binding = 1) writeonly buffer VisibilityBuffer {
+    uint visibility[];
+};
+
+// Push constants: VP matrix + camera position + section count
+layout(push_constant) uniform PushConstants {
+    mat4 viewProj;       // 64 bytes
+    vec4 cameraPos;      // 16 bytes (xyz + padding)
+    uint sectionCount;   // 4 bytes
+};
+
+// Extract frustum planes from VP matrix (Gribb-Hartmann method)
+// Each plane: (nx, ny, nz, d) where nx*x + ny*y + nz*z + d >= 0 means inside
+void extractFrustumPlanes(mat4 vp, out vec4 planes[6]) {
+    // Left
+    planes[0] = vec4(
+        vp[0][3] + vp[0][0],
+        vp[1][3] + vp[1][0],
+        vp[2][3] + vp[2][0],
+        vp[3][3] + vp[3][0]
+    );
+    // Right
+    planes[1] = vec4(
+        vp[0][3] - vp[0][0],
+        vp[1][3] - vp[1][0],
+        vp[2][3] - vp[2][0],
+        vp[3][3] - vp[3][0]
+    );
+    // Bottom
+    planes[2] = vec4(
+        vp[0][3] + vp[0][1],
+        vp[1][3] + vp[1][1],
+        vp[2][3] + vp[2][1],
+        vp[3][3] + vp[3][1]
+    );
+    // Top
+    planes[3] = vec4(
+        vp[0][3] - vp[0][1],
+        vp[1][3] - vp[1][1],
+        vp[2][3] - vp[2][1],
+        vp[3][3] - vp[3][1]
+    );
+    // Near
+    planes[4] = vec4(
+        vp[0][3] + vp[0][2],
+        vp[1][3] + vp[1][2],
+        vp[2][3] + vp[2][2],
+        vp[3][3] + vp[3][2]
+    );
+    // Far
+    planes[5] = vec4(
+        vp[0][3] - vp[0][2],
+        vp[1][3] - vp[1][2],
+        vp[2][3] - vp[2][2],
+        vp[3][3] - vp[3][2]
+    );
+}
+
+// Test AABB against a single frustum plane.
+// Returns true if the AABB is completely outside the plane.
+bool isOutsidePlane(vec4 plane, vec3 aabbMin, vec3 aabbMax) {
+    // Find the positive vertex (p-vertex): the corner of the AABB
+    // that is farthest in the direction of the plane normal
+    vec3 pVertex = vec3(
+        plane.x >= 0.0 ? aabbMax.x : aabbMin.x,
+        plane.y >= 0.0 ? aabbMax.y : aabbMin.y,
+        plane.z >= 0.0 ? aabbMax.z : aabbMin.z
+    );
+
+    // If the p-vertex is outside, the entire AABB is outside
+    return dot(plane.xyz, pVertex) + plane.w < 0.0;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    if (idx >= sectionCount) return;
+
+    vec3 aabbMin = aabbs[idx * 2].xyz;
+    vec3 aabbMax = aabbs[idx * 2 + 1].xyz;
+
+    // Extract frustum planes from VP matrix
+    vec4 planes[6];
+    extractFrustumPlanes(viewProj, planes);
+
+    // Test against all 6 frustum planes
+    bool visible = true;
+    for (int i = 0; i < 6; i++) {
+        if (isOutsidePlane(planes[i], aabbMin, aabbMax)) {
+            visible = false;
+            break;
+        }
+    }
+
+    // Distance culling: check if section center is within render distance
+    // (render distance is implicitly encoded in the far plane, but we add
+    // an explicit squared-distance check for tighter culling)
+    if (visible) {
+        vec3 center = (aabbMin + aabbMax) * 0.5;
+        vec3 diff = center - cameraPos.xyz;
+        float distSq = dot(diff, diff);
+
+        // Use far plane distance as max render distance
+        // Far plane normal points inward, so plane.w / length(plane.xyz) = distance
+        float farDist = abs(planes[5].w) / length(planes[5].xyz);
+        float maxDistSq = farDist * farDist;
+
+        if (distSq > maxDistSq) {
+            visible = false;
+        }
+    }
+
+    visibility[idx] = visible ? 1u : 0u;
+}

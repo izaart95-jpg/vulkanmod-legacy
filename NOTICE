@@ -1,0 +1,16 @@
+VulkanMod 1.8.9 backport
+========================
+
+This work is a backport of VulkanMod (https://github.com/xCollateral/VulkanMod),
+which is licensed under the GNU Lesser General Public License 3.0. The original
+LICENSE file is retained.
+
+The 1.8.9 implementation also incorporates the Legacy LWJGL3 compatibility layer
+by Zarzelcow and the 1.8.9 Vulkan backport by hopccne
+(https://github.com/hopccne/VulkanMod-LWJGL3-1.8.9). The upstream backport's
+license text is included as LICENSE-HOP. Where that license applies, it is a
+non-commercial license; review both licenses before redistributing a combined
+build.
+
+No Mojang code is redistributed by this repository. Minecraft 1.8.9 is downloaded
+by the build tooling for compilation and must be obtained from Mojang.

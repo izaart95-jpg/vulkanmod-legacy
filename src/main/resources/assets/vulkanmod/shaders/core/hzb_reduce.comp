@@ -1,0 +1,44 @@
+#version 450
+
+// Builds one level of the depth pyramid by taking the farthest of four samples.
+//
+// Occlusion asks "is everything in this screen region nearer than my object?", so the
+// conservative reduction is the maximum depth: a region only occludes what is behind all of it.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D srcDepth;
+layout(binding = 1, r32f) uniform writeonly image2D dstDepth;
+
+layout(push_constant) uniform PushConstants {
+    ivec2 dstSize;
+    // Level zero reads the depth attachment, whose size is the swapchain extent and so bears no
+    // fixed ratio to the power-of-two pyramid. Sampling it by texel index covered only a corner
+    // of the screen. Normalised coordinates map the whole image at any size; later levels read a
+    // pyramid mip, which is exactly twice the destination and indexes cleanly.
+    int srcIsDepth;
+};
+
+void main() {
+    ivec2 dstPos = ivec2(gl_GlobalInvocationID.xy);
+    if (dstPos.x >= dstSize.x || dstPos.y >= dstSize.y) return;
+
+    float d;
+    if (srcIsDepth != 0) {
+        vec2 uv = (vec2(dstPos) + 0.5) / vec2(dstSize);
+        vec2 q = 0.25 / vec2(dstSize);
+        float d0 = textureLod(srcDepth, uv + vec2(-q.x, -q.y), 0.0).r;
+        float d1 = textureLod(srcDepth, uv + vec2( q.x, -q.y), 0.0).r;
+        float d2 = textureLod(srcDepth, uv + vec2(-q.x,  q.y), 0.0).r;
+        float d3 = textureLod(srcDepth, uv + vec2( q.x,  q.y), 0.0).r;
+        d = max(max(d0, d1), max(d2, d3));
+    } else {
+        ivec2 srcPos = dstPos * 2;
+        float d0 = texelFetch(srcDepth, srcPos, 0).r;
+        float d1 = texelFetch(srcDepth, srcPos + ivec2(1, 0), 0).r;
+        float d2 = texelFetch(srcDepth, srcPos + ivec2(0, 1), 0).r;
+        float d3 = texelFetch(srcDepth, srcPos + ivec2(1, 1), 0).r;
+        d = max(max(d0, d1), max(d2, d3));
+    }
+
+    imageStore(dstDepth, dstPos, vec4(d));
+}
