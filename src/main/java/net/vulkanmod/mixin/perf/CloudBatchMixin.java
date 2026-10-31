@@ -5,6 +5,7 @@ import net.minecraft.client.render.BufferBuilder;
 import net.minecraft.client.render.Tessellator;
 import net.minecraft.client.render.VertexFormat;
 import net.minecraft.client.render.WorldRenderer;
+import net.vulkanmod.Initializer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -51,6 +52,15 @@ public class CloudBatchMixin {
     @Unique private boolean vulkanmodCloudBatchOpen = false;
 
     /**
+     * Batching relies on the Vulkan Tessellator keeping the built buffer alive across a draw.
+     * Vanilla's OpenGL path resets it, so in fallback mode every hook must behave like vanilla.
+     */
+    @Unique
+    private static boolean vulkanmodBatchEnabled() {
+        return VULKANMOD_BATCH && Initializer.vulkanReady;
+    }
+
+    /**
      * Cuts the pass loop to a single iteration.
      *
      * <p>Ordinal 1: the method pushes the int 2 twice, and the first is part of the coordinate
@@ -59,14 +69,14 @@ public class CloudBatchMixin {
     @ModifyConstant(method = "renderFancyClouds",
                     constant = @Constant(intValue = 2, ordinal = 1))
     private int vulkanmodSinglePass(int passes) {
-        return VULKANMOD_BATCH ? 1 : passes;
+        return vulkanmodBatchEnabled() ? 1 : passes;
     }
 
     @Redirect(method = "renderFancyClouds",
             at = @At(value = "INVOKE",
                      target = "Lnet/minecraft/client/render/BufferBuilder;begin(ILnet/minecraft/client/render/VertexFormat;)V"))
     private void vulkanmodOpenCloudBatch(BufferBuilder buffer, int mode, VertexFormat format) {
-        if (!VULKANMOD_BATCH) {
+        if (!vulkanmodBatchEnabled()) {
             buffer.begin(mode, format);
             return;
         }
@@ -79,7 +89,7 @@ public class CloudBatchMixin {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/render/Tessellator;draw()V"))
     private void vulkanmodDeferCloudDraw(Tessellator tessellator) {
         // Deferred to the end of the method; the cells keep appending to the open buffer.
-        if (!VULKANMOD_BATCH) tessellator.draw();
+        if (!vulkanmodBatchEnabled()) tessellator.draw();
     }
 
     /**
@@ -92,7 +102,7 @@ public class CloudBatchMixin {
      */
     @Inject(method = "renderFancyClouds", at = @At("RETURN"))
     private void vulkanmodDrawBothPasses(float tickDelta, int pass, CallbackInfo ci) {
-        if (!VULKANMOD_BATCH || !vulkanmodCloudBatchOpen) {
+        if (!vulkanmodBatchEnabled() || !vulkanmodCloudBatchOpen) {
             vulkanmodCloudBatchOpen = false;
             return;
         }
