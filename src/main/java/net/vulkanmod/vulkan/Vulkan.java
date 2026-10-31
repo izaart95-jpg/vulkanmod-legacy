@@ -1,6 +1,7 @@
 package net.vulkanmod.vulkan;
 
 import net.vulkanmod.Initializer;
+import net.vulkanmod.util.AndroidUtil;
 import net.vulkanmod.vulkan.memory.MemoryManager;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
 import net.vulkanmod.vulkan.memory.StagingBuffer;
@@ -50,6 +51,20 @@ import static org.lwjgl.vulkan.VK12.VK_API_VERSION_1_2;
 public class Vulkan {
 
     private static final int UINT32_MAX = 0xFFFFFFFF;
+
+    // Android Vulkan drivers are only guaranteed to expose 1.0.  Asking for a
+    // newer instance/allocator version can make vkCreateInstance fail even
+    // though the device would render fine with the 1.0 feature set used here.
+    private static final boolean ANDROID = AndroidUtil.isAndroid();
+    private static final int TARGET_API_VERSION = ANDROID ? VK_API_VERSION_1_0 : VK_API_VERSION_1_2;
+
+    // VK_KHR_android_surface is not part of the LWJGL 3.3.1 bindings the
+    // desktop jar compiles against.  The Android jar bundles the 3.3.3
+    // bindings, so the call is made reflectively.  The values below are fixed
+    // by the Vulkan API.
+    private static final String VK_KHR_SURFACE_EXTENSION_NAME = "VK_KHR_surface";
+    private static final String VK_KHR_ANDROID_SURFACE_EXTENSION_NAME = "VK_KHR_android_surface";
+    private static final int VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR = 1000008000;
 
     public static final int INDEX_SIZE = Short.BYTES;
 
@@ -294,7 +309,7 @@ public class Vulkan {
             appInfo.applicationVersion(VK_MAKE_VERSION(1, 0, 0));
             appInfo.pEngineName(stack.UTF8Safe("No Engine"));
             appInfo.engineVersion(VK_MAKE_VERSION(1, 0, 0));
-            appInfo.apiVersion(VK_API_VERSION_1_2);
+            appInfo.apiVersion(TARGET_API_VERSION);
 
             VkInstanceCreateInfo createInfo = VkInstanceCreateInfo.callocStack(stack);
 
@@ -355,6 +370,21 @@ public class Vulkan {
     private static void createSurface(long handle) {
         window = handle;
 
+        if (ANDROID) {
+            Initializer.LOGGER.info("Creating Android Vulkan surface for native window: " + window);
+            surface = createAndroidSurface(instance, window);
+            Initializer.LOGGER.info("Vulkan surface created successfully: " + surface);
+            return;
+        }
+
+        createDesktopSurface();
+    }
+
+    /**
+     * Desktop-only: GLFWVulkan is not safe to touch on Android, where Pojav
+     * replaces it with a stub that has no Vulkan bindings on its classpath.
+     */
+    private static void createDesktopSurface() {
         try(MemoryStack stack = stackPush()) {
 
             LongBuffer pSurface = stack.longs(VK_NULL_HANDLE);
@@ -367,6 +397,41 @@ public class Vulkan {
 
             surface = pSurface.get(0);
             Initializer.LOGGER.info("Vulkan surface created successfully: " + surface);
+        }
+    }
+
+    /**
+     * Creates a VkSurfaceKHR from the ANativeWindow Pojav returned from
+     * glfwCreateWindow(GLFW_NO_API).
+     *
+     * <p>The desktop build compiles against LWJGL 3.3.1, which predates the
+     * {@code VK_KHR_android_surface} bindings.  The Android jar bundles
+     * LWJGL 3.3.3, so the two classes needed for the call are looked up at
+     * runtime.  On desktop this method is never invoked.
+     */
+    private static long createAndroidSurface(VkInstance vkInstance, long nativeWindow) {
+        try(MemoryStack stack = stackPush()) {
+            Class<?> infoClass = Class.forName("org.lwjgl.vulkan.VkAndroidSurfaceCreateInfoKHR");
+            Class<?> androidClass = Class.forName("org.lwjgl.vulkan.KHRAndroidSurface");
+
+            Object createInfo = infoClass.getMethod("calloc", MemoryStack.class).invoke(null, stack);
+            infoClass.getMethod("sType", int.class)
+                    .invoke(createInfo, VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR);
+            infoClass.getMethod("window", long.class).invoke(createInfo, nativeWindow);
+
+            LongBuffer pSurface = stack.longs(VK_NULL_HANDLE);
+            int result = (Integer) androidClass.getMethod("vkCreateAndroidSurfaceKHR",
+                            VkInstance.class, infoClass, VkAllocationCallbacks.class, LongBuffer.class)
+                    .invoke(null, vkInstance, createInfo, null, pSurface);
+
+            if(result != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create Android window surface, error code: " + result);
+            }
+
+            return pSurface.get(0);
+        } catch (ReflectiveOperationException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new RuntimeException("Failed to create Android window surface", cause);
         }
     }
 
@@ -515,7 +580,7 @@ public class Vulkan {
             allocatorCreateInfo.device(device);
             allocatorCreateInfo.pVulkanFunctions(vulkanFunctions);
             allocatorCreateInfo.instance(instance);
-            allocatorCreateInfo.vulkanApiVersion(VK_API_VERSION_1_2);
+            allocatorCreateInfo.vulkanApiVersion(TARGET_API_VERSION);
 
             PointerBuffer pAllocator = stack.pointers(VK_NULL_HANDLE);
 
@@ -560,12 +625,14 @@ public class Vulkan {
             int presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
             VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
 
-//            IntBuffer imageCount = stack.ints(Math.max(swapChainSupport.capabilities.minImageCount(), 2));
-            IntBuffer imageCount = stack.ints(frameQueueSize);
-
-            if(swapChainSupport.capabilities.maxImageCount() > 0 && imageCount.get(0) > swapChainSupport.capabilities.maxImageCount()) {
-                imageCount.put(0, swapChainSupport.capabilities.maxImageCount());
+            // Some Android drivers require more than three swap chain images
+            // (minImageCount can be 4 or higher), so never ask for fewer than
+            // the surface reports and still respect maxImageCount.
+            int minImageCount = Math.max(swapChainSupport.capabilities.minImageCount(), frameQueueSize);
+            if(swapChainSupport.capabilities.maxImageCount() > 0 && minImageCount > swapChainSupport.capabilities.maxImageCount()) {
+                minImageCount = swapChainSupport.capabilities.maxImageCount();
             }
+            IntBuffer imageCount = stack.ints(minImageCount);
 
             VkSwapchainCreateInfoKHR createInfo = VkSwapchainCreateInfoKHR.callocStack(stack);
 
@@ -1047,6 +1114,36 @@ public class Vulkan {
     }
 
     private static PointerBuffer getRequiredExtensions() {
+
+        if(ANDROID) {
+            // Pojav's GLFW is a stub that does not implement Vulkan surface
+            // creation at all.  The Android platform extension is the only
+            // way to turn the ANativeWindow Pojav returns into a VkSurfaceKHR.
+            MemoryStack stack = stackGet();
+
+            PointerBuffer extensions = stack.mallocPointer(ENABLE_VALIDATION_LAYERS ? 3 : 2);
+            extensions.put(stack.UTF8(VK_KHR_SURFACE_EXTENSION_NAME));
+            extensions.put(stack.UTF8(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME));
+            if(ENABLE_VALIDATION_LAYERS) {
+                extensions.put(stack.UTF8(VK_EXT_DEBUG_UTILS_EXTENSION_NAME));
+            }
+
+            Initializer.LOGGER.info("Required Vulkan instance extensions (" + extensions.position() + "):");
+            for (int i = 0; i < extensions.position(); i++) {
+                Initializer.LOGGER.info("  - " + extensions.getStringUTF8(i));
+            }
+
+            return extensions.rewind();
+        }
+
+        return getDesktopRequiredExtensions();
+    }
+
+    /**
+     * Desktop-only: kept in a separate method so the JVM never has to resolve
+     * GLFWVulkan on Android (Pojav's stub cannot see the bundled bindings).
+     */
+    private static PointerBuffer getDesktopRequiredExtensions() {
 
         PointerBuffer glfwExtensions = glfwGetRequiredInstanceExtensions();
 

@@ -76,6 +76,9 @@ dependencies {
     implementation "org.lwjgl:lwjgl-glfw"
     implementation "org.lwjgl:lwjgl-openal"
     implementation "org.lwjgl:lwjgl-opengl"
+    // Pure Java EGL bindings. Only used by the Android path (private pbuffer
+    // context); harmless on desktop and tiny compared with the natives.
+    implementation "org.lwjgl:lwjgl-egl"
 
     // Vulkan dependencies.
     implementation "org.lwjgl:lwjgl-vulkan:$lwjglVersion"
@@ -157,6 +160,7 @@ shadowJar {
         include(dependency("org.lwjgl:lwjgl-glfw:$lwjglVersion"))
         include(dependency("org.lwjgl:lwjgl-openal:$lwjglVersion"))
         include(dependency("org.lwjgl:lwjgl-opengl:$lwjglVersion"))
+        include(dependency("org.lwjgl:lwjgl-egl:$lwjglVersion"))
         include(dependency("org.lwjgl:lwjgl-vulkan:$lwjglVersion"))
         include(dependency("org.lwjgl:lwjgl-vma:$lwjglVersion"))
         include(dependency("org.lwjgl:lwjgl-shaderc:$lwjglVersion"))
@@ -169,6 +173,84 @@ task remapShadowJar(type: net.fabricmc.loom.task.RemapJarTask, dependsOn: shadow
     archiveFileName = "${archivesBaseName}-${project.version}.jar"
     addNestedDependencies = false
 }
+
+// ---------------------------------------------------------------------------
+// Android / Pojav Launcher flavour.
+//
+// Pojav runs the game on a desktop JVM over Android.  Its parent class loader
+// already provides LWJGL core, GLFW, OpenAL and OpenGL (patched for gl4es),
+// so those classes and their desktop natives must NOT be bundled here: Knot
+// is child-first and would shadow the launcher's Android builds with ELF
+// files that need glibc.  The Vulkan, VMA, shaderc and EGL bindings are not
+// part of Pojav's classpath, so they are bundled together with Android
+// natives for every ABI.  Pojav's dlopen hook extracts and loads them.
+// ---------------------------------------------------------------------------
+configurations {
+    androidBundle
+}
+
+dependencies {
+    // LWJGL 3.3.3 is the first release with VK_KHR_android_surface bindings.
+    androidBundle "org.lwjgl:lwjgl-vulkan:3.3.3"
+    androidBundle "org.lwjgl:lwjgl-vma:3.3.3"
+    androidBundle "org.lwjgl:lwjgl-shaderc:3.3.3"
+    androidBundle "org.lwjgl:lwjgl-egl:3.3.3"
+    // Only GL and GLCapabilities are taken from this jar (see androidJar).
+    // Pojav patches its own GL.createCapabilities() to call
+    // glfwMakeContextCurrent(), which is invalid while Vulkan owns the
+    // ANativeWindow, so the mod ships the unpatched LWJGL class.
+    androidBundle "org.lwjgl:lwjgl-opengl:3.3.3"
+
+    androidBundle "org.jetbrains.kotlin:kotlin-stdlib:1.6.10"
+    androidBundle "org.jetbrains.kotlin:kotlin-stdlib-common:1.6.10"
+    androidBundle "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.6.10"
+    androidBundle "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.6.10"
+    androidBundle "org.javassist:javassist:3.29.2-GA"
+    androidBundle "org.joml:joml:1.10.4"
+}
+
+task androidJar(type: Jar) {
+    group = "build"
+    description = "Bundles the Android/Pojav flavour of the mod."
+    // The remapped jar uses the final "-android" name; keep the intermediate
+    // under a different classifier so the two tasks cannot overwrite each other.
+    archiveClassifier = "android-raw"
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from sourceSets.main.output
+
+    from({ configurations.androidBundle.collect { it.isDirectory() ? it : zipTree(it) } }) {
+        include "org/lwjgl/vulkan/**"
+        include "org/lwjgl/util/vma/**"
+        include "org/lwjgl/util/shaderc/**"
+        include "org/lwjgl/egl/**"
+        include "org/lwjgl/opengl/GL.class"
+        include "org/lwjgl/opengl/GL\$*.class"
+        include "org/lwjgl/opengl/GLCapabilities.class"
+        include "kotlin/**"
+        include "org/jetbrains/annotations/**"
+        include "javassist/**"
+        include "org/joml/**"
+        include "META-INF/*.kotlin_module"
+        exclude "META-INF/MANIFEST.MF"
+        exclude "META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA"
+        exclude "module-info.class"
+        exclude "META-INF/versions/**"
+    }
+
+    // Android natives, laid out exactly like the LWJGL natives jars so that
+    // Library.loadNative/loadSystem can discover them on the classpath.
+    from("android/natives")
+    exclude "**/*.sha1"
+}
+
+task remapAndroidJar(type: net.fabricmc.loom.task.RemapJarTask, dependsOn: androidJar) {
+    input = androidJar.archiveFile
+    archiveFileName = "${archivesBaseName}-${project.version}-android.jar"
+    addNestedDependencies = false
+}
+
+build.dependsOn remapAndroidJar
 
 // `build` must produce the installable jar, not only the slim class jar.
 build.dependsOn remapShadowJar

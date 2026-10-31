@@ -39,6 +39,10 @@ public final class WindowModeController {
 
     /** Called once per client tick. Cheap when the option has not changed. */
     public static void tick() {
+        // Android is always fullscreen and Pojav's GLFW stub has no monitors
+        // or window decorations to toggle.
+        if (net.vulkanmod.util.AndroidUtil.isAndroid()) return;
+
         boolean wanted = VulkanModConfig.WINDOWED_FULLSCREEN.value;
 
         if (!initialized) {
