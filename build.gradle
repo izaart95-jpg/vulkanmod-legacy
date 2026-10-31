@@ -191,6 +191,9 @@ configurations {
 
 dependencies {
     // LWJGL 3.3.3 is the first release with VK_KHR_android_surface bindings.
+    // The core jar is only used for org.lwjgl.Version, which the 1.8.9
+    // compatibility shim needs even when the launcher hides its own LWJGL.
+    androidBundle "org.lwjgl:lwjgl:3.3.3"
     androidBundle "org.lwjgl:lwjgl-vulkan:3.3.3"
     androidBundle "org.lwjgl:lwjgl-vma:3.3.3"
     androidBundle "org.lwjgl:lwjgl-shaderc:3.3.3"
@@ -220,6 +223,13 @@ task androidJar(type: Jar) {
     from sourceSets.main.output
 
     from({ configurations.androidBundle.collect { it.isDirectory() ? it : zipTree(it) } }) {
+        // The mod's 1.8.9 compatibility shim org.lwjgl.Sys calls
+        // Version.getVersion() in its static initializer. Pojav's parent
+        // class loader does not always expose LWJGL core, so bundle the
+        // small generated version class with the Android jar.
+        include "org/lwjgl/Version.class"
+        include "org/lwjgl/Version\$BuildType.class"
+        include "org/lwjgl/VersionImpl.class"
         include "org/lwjgl/vulkan/**"
         include "org/lwjgl/util/vma/**"
         include "org/lwjgl/util/shaderc/**"
