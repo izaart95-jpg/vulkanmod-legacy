@@ -1326,13 +1326,27 @@ public class Drawer {
     }
 
     public static void setDepthBias(float units, float factor) {
+        // vkCmdSetDepthBias is only valid inside a render pass. Minecraft calls
+        // GlStateManager.enablePolyOffset() from screen/tick code as well as from render code;
+        // on desktop drivers an out-of-pass call is ignored, but Mali faults in the driver.
+        // initiateRenderPass() resets the bias to zero anyway, so skipping is safe.
+        if (INSTANCE == null || !INSTANCE.isRenderPassActive()) return;
         VkCommandBuffer commandBuffer = commandBuffers.get(INSTANCE.imageIndex);
         vkCmdSetDepthBias(commandBuffer, units, 0.0f, factor);
     }
 
     public static void clearAttachments(int v) {
         if (skipRendering) return;
-        if (INSTANCE != null) INSTANCE.flushTerrainBatch();
+
+        // 1.8.9's LoadingScreenRenderer clears the framebuffer from setTitle/setTask, which run
+        // during the tick before the frame's render pass exists. Recording
+        // vkCmdClearAttachments on a command buffer that is not inside a render pass is invalid;
+        // desktop drivers quietly ignore it, Mali segfaults inside libGLES_mali. The next
+        // render pass begins with LOAD_OP_CLEAR for both attachments, so the skipped clear is
+        // redundant.
+        if (INSTANCE == null || !INSTANCE.isRenderPassActive()) return;
+
+        INSTANCE.flushTerrainBatch();
 
         VkCommandBuffer commandBuffer = commandBuffers.get(INSTANCE.imageIndex);
 
