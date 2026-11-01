@@ -191,17 +191,20 @@ configurations {
 
 dependencies {
     // LWJGL 3.3.3 is the first release with VK_KHR_android_surface bindings.
-    // The core jar is only used for org.lwjgl.Version, which the 1.8.9
-    // compatibility shim needs even when the launcher hides its own LWJGL.
+    // Pojav's game classpath also contains LWJGL 2 for Minecraft 1.8.9.  LWJGL 2
+    // happens to ship org.lwjgl.PointerBuffer but not the LWJGL 3
+    // CustomBuffer base class, so using the launcher's LWJGL 3 classes through
+    // the parent loader verifies GL against the wrong PointerBuffer.  The mod
+    // therefore carries a complete, self-consistent stock LWJGL 3 core and
+    // OpenGL/OpenAL API.  GLFW is the exception: Pojav's GLFW is a Java shim
+    // over its Android window/input bridge, so org.lwjgl.glfw stays on the
+    // launcher's class loader (see androidJar).
     androidBundle "org.lwjgl:lwjgl:3.3.3"
+    androidBundle "org.lwjgl:lwjgl-openal:3.3.3"
     androidBundle "org.lwjgl:lwjgl-vulkan:3.3.3"
     androidBundle "org.lwjgl:lwjgl-vma:3.3.3"
     androidBundle "org.lwjgl:lwjgl-shaderc:3.3.3"
     androidBundle "org.lwjgl:lwjgl-egl:3.3.3"
-    // Only GL and GLCapabilities are taken from this jar (see androidJar).
-    // Pojav patches its own GL.createCapabilities() to call
-    // glfwMakeContextCurrent(), which is invalid while Vulkan owns the
-    // ANativeWindow, so the mod ships the unpatched LWJGL class.
     androidBundle "org.lwjgl:lwjgl-opengl:3.3.3"
 
     androidBundle "org.jetbrains.kotlin:kotlin-stdlib:1.6.10"
@@ -223,20 +226,13 @@ task androidJar(type: Jar) {
     from sourceSets.main.output
 
     from({ configurations.androidBundle.collect { it.isDirectory() ? it : zipTree(it) } }) {
-        // The mod's 1.8.9 compatibility shim org.lwjgl.Sys calls
-        // Version.getVersion() in its static initializer. Pojav's parent
-        // class loader does not always expose LWJGL core, so bundle the
-        // small generated version class with the Android jar.
-        include "org/lwjgl/Version.class"
-        include "org/lwjgl/Version\$BuildType.class"
-        include "org/lwjgl/VersionImpl.class"
-        include "org/lwjgl/vulkan/**"
-        include "org/lwjgl/util/vma/**"
-        include "org/lwjgl/util/shaderc/**"
-        include "org/lwjgl/egl/**"
-        include "org/lwjgl/opengl/GL.class"
-        include "org/lwjgl/opengl/GL\$*.class"
-        include "org/lwjgl/opengl/GLCapabilities.class"
+        // Pojav's 1.8.9 classpath also has LWJGL 2, whose PointerBuffer is
+        // unrelated to LWJGL 3's CustomBuffer.  Bundling the complete LWJGL 3
+        // core and API keeps GL/GLCapabilities/PointerBuffer consistent inside
+        // Knot, which is child-first.  GLFW is deliberately excluded: Pojav's
+        // GLFW is a Java-side Android bridge, not the stock native binding.
+        include "org/lwjgl/**"
+        exclude "org/lwjgl/glfw/**"
         include "kotlin/**"
         include "org/jetbrains/annotations/**"
         include "javassist/**"
@@ -250,7 +246,11 @@ task androidJar(type: Jar) {
 
     // Android natives, laid out exactly like the LWJGL natives jars so that
     // Library.loadNative/loadSystem can discover them on the classpath.
+    // liblwjgl.so is the core JNI library; it is taken from Pojav's own
+    // Android build and extracted under a mod-private path, so it does not
+    // collide with the copy already loaded in Pojav's parent loader.
     from("android/natives")
+    from("android/pojav/natives")
     exclude "**/*.sha1"
 }
 
@@ -261,6 +261,79 @@ task remapAndroidJar(type: net.fabricmc.loom.task.RemapJarTask, dependsOn: andro
 }
 
 build.dependsOn remapAndroidJar
+
+// ---------------------------------------------------------------------------
+// MJLauncher flavor.
+//
+// MJLauncher runs 1.8.9 through an LWJGL2 classpath and provides no LWJGL3
+// classes at all, so this jar has to carry the complete LWJGL3 Java API.
+// Its launcher registers a dlopen hook on org.lwjgl.system.linux.DynamicLinkLoader
+// when liblwjgl.so is loaded; that hook redirects libvulkan.so to the Vulkan
+// driver selected in the launcher and libGLMojo.so to the GL4ES/LTW renderer.
+// The launcher supplies its own libglfw.so and libopenal.so, so those two
+// natives must not be bundled here (their Java bindings still are).
+// ---------------------------------------------------------------------------
+configurations {
+    mjLauncherBundle
+}
+
+dependencies {
+    mjLauncherBundle "org.lwjgl:lwjgl:3.3.3"
+    mjLauncherBundle "org.lwjgl:lwjgl-glfw:3.3.3"
+    mjLauncherBundle "org.lwjgl:lwjgl-openal:3.3.3"
+    mjLauncherBundle "org.lwjgl:lwjgl-opengl:3.3.3"
+    mjLauncherBundle "org.lwjgl:lwjgl-egl:3.3.3"
+    mjLauncherBundle "org.lwjgl:lwjgl-vulkan:3.3.3"
+    mjLauncherBundle "org.lwjgl:lwjgl-vma:3.3.3"
+    mjLauncherBundle "org.lwjgl:lwjgl-shaderc:3.3.3"
+
+    mjLauncherBundle "org.jetbrains.kotlin:kotlin-stdlib:1.6.10"
+    mjLauncherBundle "org.jetbrains.kotlin:kotlin-stdlib-common:1.6.10"
+    mjLauncherBundle "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.6.10"
+    mjLauncherBundle "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.6.10"
+    mjLauncherBundle "org.javassist:javassist:3.29.2-GA"
+    mjLauncherBundle "org.joml:joml:1.10.4"
+}
+
+task mjLauncherJar(type: Jar) {
+    group = "build"
+    description = "Bundles the MJLauncher flavour of the mod."
+    archiveClassifier = "mjlauncher-raw"
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    // The mod's compatibility shims must win over LWJGL3's same-named
+    // classes (org.lwjgl.Sys, org.lwjgl.opengl.Display, org.lwjgl.input.*),
+    // so the source output is added first and duplicates are excluded.
+    from sourceSets.main.output
+
+    from({ configurations.mjLauncherBundle.collect { it.isDirectory() ? it : zipTree(it) } }) {
+        include "org/lwjgl/**"
+        include "kotlin/**"
+        include "org/jetbrains/annotations/**"
+        include "javassist/**"
+        include "org/joml/**"
+        include "META-INF/*.kotlin_module"
+        exclude "META-INF/MANIFEST.MF"
+        exclude "META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA"
+        exclude "module-info.class"
+        exclude "META-INF/versions/**"
+    }
+
+    // Android Vulkan/VMA/shaderc natives plus the LWJGL core native that
+    // installs MJLauncher's dlopen hook.  libglfw.so and libopenal.so are
+    // intentionally absent: the launcher already provides both.
+    from("android/natives")
+    from("android/mjlauncher/natives")
+    exclude "**/*.sha1"
+}
+
+task remapMjLauncherJar(type: net.fabricmc.loom.task.RemapJarTask, dependsOn: mjLauncherJar) {
+    input = mjLauncherJar.archiveFile
+    archiveFileName = "${archivesBaseName}-${project.version}-mjlauncher.jar"
+    addNestedDependencies = false
+}
+
+build.dependsOn remapMjLauncherJar
 
 // `build` must produce the installable jar, not only the slim class jar.
 build.dependsOn remapShadowJar

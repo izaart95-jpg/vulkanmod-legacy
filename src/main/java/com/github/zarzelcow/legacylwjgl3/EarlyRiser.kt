@@ -94,7 +94,13 @@ class EarlyRiser : Runnable {
         fun addLegacyCompatibilityMethodsToGL11(classPool: ClassPool) {
             val cc = classPool.get("org.lwjgl.opengl.GL11")
             for ((legacy, current, desc) in gl11Translations) {
-                val original = cc.getMethod(current, desc)
+                if (cc.hasMethod(legacy, desc)) continue
+                val original = try {
+                    cc.getMethod(current, desc)
+                } catch (e: NotFoundException) {
+                    debug("Skipping $legacy: $current is not present")
+                    continue
+                }
                 // copy original method and rename it
                 val renamed = CtNewMethod.copy(original, cc, null)
                     .rename(legacy)
@@ -108,6 +114,11 @@ class EarlyRiser : Runnable {
         // new GL20 doesn't have a way to supply a shader source using ByteBuffer so this adds a method to do it
         fun gl20AddCompatibilityMethods(classPool: ClassPool) {
             val cc = classPool.get("org.lwjgl.opengl.GL20")
+            val descriptor = "(ILjava/nio/ByteBuffer;)V"
+            if (cc.hasMethod("glShaderSource", descriptor)) {
+                debug("GL20 already has the ByteBuffer glShaderSource overload")
+                return
+            }
             val code = """
                 public static void glShaderSource(int shader, java.nio.ByteBuffer string) {
                     byte[] data = new byte[string.limit()];
@@ -128,8 +139,9 @@ class EarlyRiser : Runnable {
             val extension = classPool.get("com.github.zarzelcow.legacylwjgl3.ALExtensions")
             val target = classPool.get("org.lwjgl.openal.AL")
             // this code is hacky, but it replaces the stub method with the real one
-            target.getMethod("destroy", "()V")
-                .rename("al_destroy") // rename destroy to al_destroy so it doesnt conflict
+            target.declaredMethods
+                .firstOrNull { it.name == "destroy" && it.methodInfo.descriptor == "()V" }
+                ?.let { it.name = "al_destroy" } // rename destroy to al_destroy so it doesnt conflict
             extension.removeMethod(
                 extension.getMethod(
                     "al_destroy",
@@ -137,15 +149,22 @@ class EarlyRiser : Runnable {
                 )
             ) // remove stub method from extension so it calls the real one
 
-            // copy methods and felds from cc to target
+            // copy methods and fields from cc to target
             for (method in extension.declaredMethods) {
+                if (target.hasMethod(method.name, method.methodInfo.descriptor)) {
+                    debug("Skipping existing AL method ${method.name}")
+                    continue
+                }
                 val copied = CtNewMethod.copy(method, target, null)
-                // dont add method if it already exists
                 target.addMethod(copied)
                 debug("Added AL extension method ${method.name}")
             }
 
             for (field in extension.declaredFields) {
+                if (target.declaredFields.any { it.name == field.name }) {
+                    debug("Skipping existing AL field ${field.name}")
+                    continue
+                }
                 val copied = CtField(field, target)
                 target.addField(copied)
                 debug("Added AL extension field ${field.name}")
@@ -159,7 +178,13 @@ class EarlyRiser : Runnable {
         fun addLegacyCompatibilityMethodsToAL10(classPool: ClassPool) {
             val cc = classPool.get("org.lwjgl.openal.AL10")
             for ((legacy, current, desc) in al10Translations) {
-                val original = cc.getMethod(current, desc)
+                if (cc.hasMethod(legacy, desc)) continue
+                val original = try {
+                    cc.getMethod(current, desc)
+                } catch (e: NotFoundException) {
+                    debug("Skipping $legacy: $current is not present")
+                    continue
+                }
                 // copy original method and rename it
                 val copied = CtNewMethod.copy(original, cc, null)
                 cc.addMethod(copied.rename(legacy))
@@ -173,6 +198,9 @@ class EarlyRiser : Runnable {
             this.name = legacy
             return this
         }
+
+        private fun CtClass.hasMethod(name: String, descriptor: String): Boolean =
+            declaredMethods.any { it.name == name && it.methodInfo.descriptor == descriptor }
 
         private fun patchNettyPlatformDependent(classPool: ClassPool) {
             // Netty patching is now handled by ClientConnectionMixin which:

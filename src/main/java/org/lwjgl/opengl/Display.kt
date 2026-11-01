@@ -328,25 +328,30 @@ object Display {
     }
 
     /**
-     * Chooses the EGL implementation the same way Pojav/Amethyst do.
+     * Chooses the EGL implementation the same way the launcher's renderer do.
      *
-     * <p>{@code POJAVEXEC_EGL} selects an alternative EGL (ANGLE, MobileGlues,
-     * Mesa, ...) by library name.  Pojav hands that name to {@code dlopen},
-     * which resolves it through {@code LD_LIBRARY_PATH}; LWJGL's loader does
-     * not, so resolve the name to an absolute path first and only fall back
-     * to the plain name when the library cannot be found.
+     * <p>Pojav uses {@code POJAVEXEC_EGL} to select an alternative EGL (ANGLE,
+     * MobileGlues, Mesa, ...) by library name.  MJLauncher instead exports the
+     * EGL library its renderer (GL4ES/LTW) uses as {@code LIBGL_EGL}.  Both
+     * launchers hand the name to {@code dlopen}, which resolves it through
+     * {@code LD_LIBRARY_PATH}; LWJGL's loader does not, so resolve the name to
+     * an absolute path first and only fall back to the plain name when the
+     * library cannot be found.
      */
     private fun androidEglLibraryPath(): String {
-        val configured = System.getenv("POJAVEXEC_EGL")?.trim()
-        if (!configured.isNullOrEmpty()) {
-            val direct = File(configured)
+        val mjLauncher = AndroidUtil.isMJLauncher()
+        val configured = (if (mjLauncher) System.getenv("LIBGL_EGL") else null)
+            ?: System.getenv("POJAVEXEC_EGL")
+        val trimmed = configured?.trim()
+        if (!trimmed.isNullOrEmpty()) {
+            val direct = File(trimmed)
             if (direct.isAbsolute) {
-                return if (direct.isFile) direct.absolutePath else configured
+                return if (direct.isFile) direct.absolutePath else trimmed
             }
 
-            val resolved = resolveAndroidLibrary(configured)
+            val resolved = resolveAndroidLibrary(trimmed)
             if (resolved != null) return resolved
-            return configured
+            return trimmed
         }
 
         val systemPath = if (System.getProperty("os.arch", "").contains("64"))
@@ -375,18 +380,89 @@ object Display {
     /**
      * Pojav's GLCapabilities constructor normally calls
      * {@code PojavRendererInit.onCreateCapabilities} to give gl4es a callback
-     * for the surface dimensions.  The mod ships the unpatched LWJGL
+     * for the surface dimensions.  The Android jar ships stock LWJGL 3
      * GLCapabilities, so the same initialization has to be requested here.
      * Desktops do not have the class and skip this entirely.
+     *
+     * <p>The mod bundles its own LWJGL core, while PojavRendererInit is loaded
+     * from the launcher and therefore refers to the launcher's
+     * {@code FunctionProvider} interface.  Passing the mod's provider directly
+     * would fail that interface check, so a small reflective proxy bridges the
+     * two class loaders.
      */
     private fun initAndroidGl4es() {
         try {
             val rendererInit = Class.forName("org.lwjgl.opengl.PojavRendererInit")
+            val method = rendererInit.methods.firstOrNull {
+                it.name == "onCreateCapabilities" && it.parameterTypes.size == 1
+            } ?: run {
+                net.vulkanmod.Initializer.LOGGER.debug(
+                    "gl4es renderer initialization skipped: onCreateCapabilities not found")
+                return
+            }
+
+            val parameterType = method.parameterTypes[0]
             val provider = GL.getFunctionProvider()
-            rendererInit.getMethod("onCreateCapabilities", org.lwjgl.system.FunctionProvider::class.java)
-                .invoke(null, provider)
+                ?: throw IllegalStateException("OpenGL function provider is not initialized")
+            val argument = if (parameterType.isInstance(provider)) {
+                provider
+            } else {
+                bridgeFunctionProvider(parameterType, provider)
+            }
+
+            method.invoke(null, argument)
+            net.vulkanmod.Initializer.LOGGER.info("Android: gl4es renderer callbacks initialized")
         } catch (t: Throwable) {
             net.vulkanmod.Initializer.LOGGER.debug("gl4es renderer initialization skipped", t)
+        }
+    }
+
+    /**
+     * Creates an object implementing the launcher's FunctionProvider (and,
+     * when possible, SharedLibrary) interface while delegating every lookup
+     * to this mod's provider.  This is only needed because PojavRendererInit
+     * and the bundled LWJGL classes live in different class loaders.
+     */
+    private fun bridgeFunctionProvider(parameterType: Class<*>, provider: org.lwjgl.system.FunctionProvider): Any {
+        if (!parameterType.isInterface) {
+            throw IllegalArgumentException("Unsupported FunctionProvider parameter: " + parameterType.name)
+        }
+
+        val interfaces = LinkedHashSet<Class<*>>()
+        interfaces.add(parameterType)
+        val sharedLibrary = try {
+            Class.forName("org.lwjgl.system.SharedLibrary", false, parameterType.classLoader)
+        } catch (ignored: Throwable) {
+            null
+        }
+        if (sharedLibrary != null && sharedLibrary.isInterface) {
+            interfaces.add(sharedLibrary)
+        }
+
+        val realLibrary = provider as? org.lwjgl.system.SharedLibrary
+        return java.lang.reflect.Proxy.newProxyInstance(
+            parameterType.classLoader, interfaces.toTypedArray()
+        ) { proxy, method, args ->
+            when (method.name) {
+                "getFunctionAddress" -> {
+                    val arg = args?.getOrNull(0)
+                    when (arg) {
+                        is CharSequence -> provider.getFunctionAddress(arg)
+                        is ByteBuffer -> provider.getFunctionAddress(arg)
+                        else -> throw UnsupportedOperationException(
+                            "Unsupported function lookup argument: " + arg)
+                    }
+                }
+                "getName" -> realLibrary?.name
+                    ?: System.getProperty("org.lwjgl.opengl.libname", "")
+                "getPath" -> realLibrary?.path ?: ""
+                "address" -> if (realLibrary != null) realLibrary.address() else 0L
+                "close" -> null
+                "toString" -> "VulkanMod FunctionProvider bridge"
+                "hashCode" -> System.identityHashCode(proxy)
+                "equals" -> proxy === args?.getOrNull(0)
+                else -> throw UnsupportedOperationException("Unsupported method: " + method.name)
+            }
         }
     }
 

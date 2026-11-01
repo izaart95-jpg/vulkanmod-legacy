@@ -56,6 +56,12 @@ public class Vulkan {
     // newer instance/allocator version can make vkCreateInstance fail even
     // though the device would render fine with the 1.0 feature set used here.
     private static final boolean ANDROID = AndroidUtil.isAndroid();
+    // MJLauncher also runs the game on Android, but it hands GLFW a real
+    // native window and expects Vulkan surfaces to be created through GLFW's
+    // own VK_KHR_android_surface implementation.  Pojav instead returns the
+    // ANativeWindow pointer from glfwCreateWindow, which is passed to
+    // vkCreateAndroidSurfaceKHR directly.
+    private static final boolean MJ_LAUNCHER = ANDROID && AndroidUtil.isMJLauncher();
     private static final int TARGET_API_VERSION = ANDROID ? VK_API_VERSION_1_0 : VK_API_VERSION_1_2;
 
     // VK_KHR_android_surface is not part of the LWJGL 3.3.1 bindings the
@@ -371,20 +377,31 @@ public class Vulkan {
         window = handle;
 
         if (ANDROID) {
-            Initializer.LOGGER.info("Creating Android Vulkan surface for native window: " + window);
-            surface = createAndroidSurface(instance, window);
+            if (MJ_LAUNCHER) {
+                // MJLauncher returns a real _GLFWwindow*, not an ANativeWindow.
+                // Its native GLFW implements glfwCreateWindowSurface with
+                // VK_KHR_android_surface over the surface the launcher owns.
+                Initializer.LOGGER.info("Creating Vulkan surface through MJLauncher GLFW for window: " + window);
+                createGlfwSurface();
+            } else {
+                Initializer.LOGGER.info("Creating Android Vulkan surface for native window: " + window);
+                surface = createAndroidSurface(instance, window);
+            }
             Initializer.LOGGER.info("Vulkan surface created successfully: " + surface);
             return;
         }
 
-        createDesktopSurface();
+        createGlfwSurface();
     }
 
     /**
-     * Desktop-only: GLFWVulkan is not safe to touch on Android, where Pojav
-     * replaces it with a stub that has no Vulkan bindings on its classpath.
+     * Uses GLFW's Vulkan surface helpers.  This runs on desktop and on
+     * MJLauncher, which supplies its own native GLFW and, unlike Pojav, has
+     * full Vulkan surface support.  Pojav replaces GLFWVulkan with a stub
+     * whose classpath has no Vulkan bindings, so that launcher keeps using
+     * the direct ANativeWindow path instead.
      */
-    private static void createDesktopSurface() {
+    private static void createGlfwSurface() {
         try(MemoryStack stack = stackPush()) {
 
             LongBuffer pSurface = stack.longs(VK_NULL_HANDLE);
