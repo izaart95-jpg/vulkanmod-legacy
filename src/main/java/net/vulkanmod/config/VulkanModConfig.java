@@ -105,6 +105,24 @@ public final class VulkanModConfig {
             "entityShadowFade", "Shadow Distance Fade",
             "Fade entity shadows out with distance instead of drawing them all", true);
 
+    /**
+     * Internal render resolution, as a percentage of the window.
+     *
+     * <p>This is the one setting that trades appearance for a large, predictable amount of GPU
+     * time instead of shaving a few percent off the CPU side. At 75% the GPU shades 56% of the
+     * pixels, and the result is scaled back up to the window in one bilinear blit. Text and
+     * distant detail soften, which is why it defaults to 100% and is opt-in.
+     *
+     * <p>The value is read when the swap chain and render pass are created, so the menu says a
+     * restart is needed. Changing the render pass final layout at runtime would invalidate every
+     * pipeline created against it.
+     */
+    public static final Option RENDER_SCALE = slider(Option.Category.PERFORMANCE,
+            "renderScale", "Render Resolution",
+            "Internal resolution as a percentage of the window. Lower means fewer pixels to "
+                    + "shade and a bigger GPU win, at the cost of softness. Takes effect after a restart",
+            50, 100, 100);
+
     // === Animations, restoring 1.7 poses ===
 
     public static final Option ARC_POSITION = add(Option.Category.ANIMATIONS,

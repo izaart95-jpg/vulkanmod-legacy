@@ -87,6 +87,9 @@ public class VRenderSystem {
     // Pre-allocated color arrays — eliminates new float[] per call
     private static final float[] shaderColorArr = new float[4];
     private static final float[] shaderFogColorArr = new float[4];
+    // Hurt/creeper texture-environment overlay. Zero alpha means "no overlay", so normal entity
+    // draws are byte-identical to before. Set around LivingEntityRenderer.renderModel().
+    private static final float[] entityOverlayColorArr = new float[4];
 
     public static ByteBuffer ChunkOffset = MemoryUtil.memAlloc(3 * 4);
     public static ByteBuffer lightDirection0 = MemoryUtil.memAlloc(3 * 4);
@@ -310,9 +313,15 @@ public class VRenderSystem {
 
     public static void beginFrame() {
         frameTick++;
+        fogColorCaptured = false;
+        // An entity render that threw can leave the overlay set; never let it leak into the HUD
+        // or the next frame.
+        clearEntityOverlayColor();
     }
 
     public static boolean isSoftwareStackTrusted() { return softwareStackTrusted; }
+
+    public static boolean isMatrixDebug() { return MATRIX_DEBUG; }
 
     /**
      * Compares the software modelview against GL. Returns the largest component difference.
@@ -409,9 +418,14 @@ public class VRenderSystem {
     public static void matrixMode(int mode) {
         // When LEAVING GL_PROJECTION, sync from GL to catch gluPerspective
         // which writes directly to GL and bypasses GlStateManager.
-        // This is the only GL read we can't avoid — it happens once per
+        // This is the only GL read we can't avoid -- it happens once per
         // projection setup, not per draw.
-        if (currentMatrixMode == GL_PROJECTION && mode != GL_PROJECTION) {
+        //
+        // With the software stack trusted the read is unnecessary: the mod's own GLU helper
+        // goes through GlStateManager, so the mirror already has the projection, and no GL
+        // matrix calls are emitted at all. Keep the fallback for -Dvulkanmod.nosoftwarematrix.
+        if (currentMatrixMode == GL_PROJECTION && mode != GL_PROJECTION
+                && (!softwareStackTrusted || MATRIX_DEBUG)) {
             glMatrixReadBuf.clear();
             GL11.glGetFloatv(0x0BA7, glMatrixReadBuf); // GL_PROJECTION_MATRIX
             currentProjection.set(glMatrixReadBuf);
@@ -577,6 +591,23 @@ public class VRenderSystem {
     public static Matrix4f getCurrentProjection() { return currentProjection; }
     public static Matrix4f getCurrentModelView() { return currentModelView; }
 
+    /**
+     * Fills {@code dst} with the software modelview, matching {@code glGetFloatv}'s behaviour.
+     *
+     * <p>{@code Frustum.start}, {@code Camera.update} and {@code BuiltChunk} still ask GL for the
+     * matrices. Once the renderer owns the matrix stack those reads are pointless and, on
+     * Android, each one crosses gl4es. GlStateManager's hook serves them from here instead.
+     */
+    public static void writeModelView(FloatBuffer dst) {
+        dst.clear();
+        currentModelView.get(dst);
+    }
+
+    public static void writeProjection(FloatBuffer dst) {
+        dst.clear();
+        currentProjection.get(dst);
+    }
+
     // VP matrix as float array for compute shader push constants (GPU occlusion culling)
     private static final float[] vpMatrixArray = new float[16];
     private static final Matrix4f vpMatrixTemp = new Matrix4f();
@@ -591,10 +622,13 @@ public class VRenderSystem {
     }
 
     public static void setChunkOffset(float f1, float f2, float f3) {
-        Drawer.invalidateDescriptorSetCache();
+        chunkOffX = f1;
+        chunkOffY = f2;
+        chunkOffZ = f3;
         ChunkOffset.putFloat(0, f1);
         ChunkOffset.putFloat(4, f2);
         ChunkOffset.putFloat(8, f3);
+        ChunkOffset.position(0);
     }
 
     public static void setShaderColor(float f1, float f2, float f3, float f4) {
@@ -640,6 +674,29 @@ public class VRenderSystem {
         shaderFogColorArr[2] = shaderFogColor.getFloat(8);
         shaderFogColorArr[3] = shaderFogColor.getFloat(12);
         return shaderFogColorArr;
+    }
+
+    /**
+     * The texture-environment constant for the hurt/creeper overlay, in the same RGBA form
+     * Minecraft hands to {@code glTexEnv(GL_TEXTURE_ENV_COLOR)}: hurt is (1, 0, 0, 0.3), and
+     * alpha 0 disables the overlay.
+     */
+    public static void setEntityOverlayColor(float r, float g, float b, float a) {
+        entityOverlayColorArr[0] = r;
+        entityOverlayColorArr[1] = g;
+        entityOverlayColorArr[2] = b;
+        entityOverlayColorArr[3] = a;
+    }
+
+    public static void clearEntityOverlayColor() {
+        entityOverlayColorArr[0] = 0.0f;
+        entityOverlayColorArr[1] = 0.0f;
+        entityOverlayColorArr[2] = 0.0f;
+        entityOverlayColorArr[3] = 0.0f;
+    }
+
+    public static float[] getShaderEntityOverlayColorArray() {
+        return entityOverlayColorArr;
     }
 
     private static final Pipeline.LogicOpState ENABLED_LOGICOP_STATE = new Pipeline.LogicOpState(true, 0);
@@ -791,6 +848,30 @@ public class VRenderSystem {
     // Buffer for reading GL fog color (reused, avoids alloc)
     private static final FloatBuffer fogColorReadBuf = BufferUtils.createFloatBuffer(4);
 
+    // Set when GameRenderer.renderFog hands us the colour it is about to upload. That happens
+    // before the terrain layers are drawn, so the readback below is only a fallback for frames
+    // where the capture did not run (and for any other caller). It used to execute four times a
+    // frame -- once per render layer -- and every one of those reads crosses gl4es on Android.
+    private static boolean fogColorCaptured = false;
+
+    /** Logged once so a user log proves the redirect applied, even without a debugger. */
+    private static boolean fogCaptureLogged = false;
+
+    public static void markFogCaptureActive() {
+        if (fogCaptureLogged) return;
+        fogCaptureLogged = true;
+        Initializer.LOGGER.info("[Fog] renderFog redirect active - fog colour captured, GL_FOG_COLOR readback skipped");
+    }
+
+    /** Mirrors the colour GameRenderer is about to give to fixed-function fog, without a readback. */
+    public static void captureFogColor(FloatBuffer color) {
+        shaderFogColor.putFloat(0, color.get(0));
+        shaderFogColor.putFloat(4, color.get(1));
+        shaderFogColor.putFloat(8, color.get(2));
+        shaderFogColor.putFloat(12, color.get(3));
+        fogColorCaptured = true;
+    }
+
     // Read fog color, start and end directly from GL state.
     // MC 1.8.9 sets these via GL11.glFogf/glFogfv in GameRenderer.setupFog()
     // BEFORE renderLayer is called, so the values are guaranteed correct.
@@ -801,12 +882,11 @@ public class VRenderSystem {
      * GlStateManager hooks instead of being queried, which is two of the three reads gone.
      */
     public static void syncFogFromGL() {
+        if (fogColorCaptured) return;
+
         fogColorReadBuf.clear();
         GL11.glGetFloatv(0x0B66, fogColorReadBuf); // GL_FOG_COLOR
-        shaderFogColor.putFloat(0, fogColorReadBuf.get(0));
-        shaderFogColor.putFloat(4, fogColorReadBuf.get(1));
-        shaderFogColor.putFloat(8, fogColorReadBuf.get(2));
-        shaderFogColor.putFloat(12, fogColorReadBuf.get(3));
+        captureFogColor(fogColorReadBuf);
     }
 
     public static void setFogStart(float start) {

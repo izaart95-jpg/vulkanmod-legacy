@@ -27,6 +27,14 @@ public class TransferQueue {
 
     private static CommandBuffer currentCmdBuffer;
 
+    /**
+     * True between {@link #startRecording()} and {@link #endRecording()}, even when no command is
+     * recorded yet. Opening the command buffer eagerly cost one empty vkQueueSubmit (and its
+     * fence reset) every frame whose uploads all took the synchronous path -- which is most
+     * frames after the world has loaded. The buffer is now created on the first batched upload.
+     */
+    private static boolean recordingOpen;
+
     private static VkDevice device() {
         VkDevice d = device;
         if (d == null) {
@@ -82,37 +90,41 @@ public class TransferQueue {
      * them.
      */
     public static void startRecording() {
-        if (currentCmdBuffer != null) return;
-        currentCmdBuffer = beginCommands();
+        if (recordingOpen) return;
+        recordingOpen = true;
         recordingThread = Thread.currentThread();
     }
 
     public static void endRecording() {
+        if (!recordingOpen) return;
         CommandBuffer buffer = currentCmdBuffer;
-        if (buffer == null) return;
         currentCmdBuffer = null;
         recordingThread = null;
-        Synchronization.addFence(endCommands(buffer));
+        recordingOpen = false;
+        if (buffer != null) Synchronization.addFence(endCommands(buffer));
     }
 
     /** True while a batched recording session started by {@link #startRecording()} is open. */
     public static boolean hasRecording() {
-        return currentCmdBuffer != null;
+        return recordingOpen;
     }
 
     /** Whether this thread may append to the shared recording. */
     private static boolean ownsRecording() {
-        return currentCmdBuffer != null && recordingThread == Thread.currentThread();
+        return recordingOpen && recordingThread == Thread.currentThread();
     }
 
     public static CommandBuffer getCommandBuffer() {
-        return ownsRecording() ? currentCmdBuffer : beginCommands();
+        if (!ownsRecording()) return beginCommands();
+        if (currentCmdBuffer == null) currentCmdBuffer = beginCommands();
+        return currentCmdBuffer;
     }
 
     public static long endIfNeeded(CommandBuffer commandBuffer) {
         // Compared by identity rather than trusting the caller: a buffer obtained before the
         // recording opened must still be submitted on its own.
-        if (commandBuffer == currentCmdBuffer && ownsRecording()) {
+        if (recordingOpen && commandBuffer == currentCmdBuffer
+                && recordingThread == Thread.currentThread()) {
             return VK_NULL_HANDLE;
         }
         return endCommands(commandBuffer);

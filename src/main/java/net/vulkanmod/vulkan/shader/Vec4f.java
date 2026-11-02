@@ -19,6 +19,8 @@ public class Vec4f extends Field {
             this.set = VRenderSystem::getShaderColorArray;
         } else if ("FogColor".equals(this.name)) {
             this.set = VRenderSystem::getShaderFogColorArray;
+        } else if ("OverlayColor".equals(this.name)) {
+            this.set = VRenderSystem::getShaderEntityOverlayColorArray;
         }
     }
 

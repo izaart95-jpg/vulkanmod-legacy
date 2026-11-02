@@ -4,7 +4,7 @@ import net.minecraft.client.gui.DrawableHelper;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.vulkanmod.Initializer;
-import org.lwjgl.opengl.GL11;
+import org.lwjgl.util.glu.Project;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -60,11 +60,8 @@ public abstract class TitleScreenPanoramaMixin {
                 ? (float) self.width / (float) self.height
                 : aspect;
 
-        // glFrustum rather than a call back into Project: the GLU helper is supplied by the
-        // launcher at runtime and is not on the compile classpath. This is the same matrix, which
-        // is all gluPerspective builds.
-        double top = Math.tan(Math.toRadians(fovY) / 2.0) * zNear;
-        double right = top * real;
-        GL11.glFrustum(-right, right, -top, top, zNear, zFar);
+        // Call the mod's GLU helper with the real aspect instead of the hardcoded 1.0. It goes
+        // through GlStateManager, so the software matrix stack sees the panorama projection too.
+        Project.gluPerspective(fovY, real, zNear, zFar);
     }
 }

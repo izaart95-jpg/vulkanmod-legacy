@@ -209,6 +209,25 @@ public class Vulkan {
     public static int getDepthImageCount() { return depthImages.length; }
     public static int getDepthFormat() { return findDepthFormat(); }
 
+    // Optional offscreen render targets, one per swap chain image.
+    //
+    // The game still believes it is drawing to a window of client.width x client.height and
+    // keeps issuing viewport calls in those units; Drawer scales them down to these targets and
+    // the finished image is blitted up to the swap chain. Every pipeline is created against the
+    // single render pass below, so the target only has to stay the same for the whole session --
+    // hence the restart requirement on the Render Resolution setting.
+    private static boolean offscreenScaling;
+    private static int renderWidth;
+    private static int renderHeight;
+    private static long[] offscreenColorImages = new long[0];
+    private static long[] offscreenColorMemories = new long[0];
+    private static long[] offscreenColorViews = new long[0];
+
+    /** True when frames are rendered to a scaled offscreen target and blitted up at the end. */
+    public static boolean isOffscreenScaling() { return offscreenScaling; }
+    public static int getRenderWidth() { return renderWidth; }
+    public static int getRenderHeight() { return renderHeight; }
+
     private static long renderPass;
 
     private static long commandPool;
@@ -243,13 +262,67 @@ public class Vulkan {
         createCommandPool();
         allocateImmediateCmdBuffer();
 
+        readRenderScaleSetting();
         createSwapChain();
+        initRenderScale();
         createImageViews();
+        createOffscreenColorResources();
         createRenderPass();
         createDepthResources();
         createFramebuffers();
 
         createStagingBuffers();
+    }
+
+    /**
+     * Freezes the render-scale decision for the session and derives the target size.
+     *
+     * <p>Called once, before the render pass exists: the pass final layout (present directly or
+     * hand over to the blit) is baked into every pipeline, so it cannot change while the game is
+     * running. {@link #recreateSwapChain()} only refreshes the dimensions.
+     */
+    private static void initRenderScale() {
+        // Some mobile swap-chain formats (notably packed 16-bit ones) are not required to
+        // support blitting. Without it the scale-up cannot be recorded, so fall back before the
+        // render pass exists -- its final layout depends on this decision.
+        if (offscreenScaling) {
+            try (MemoryStack stack = stackPush()) {
+                VkFormatProperties formatProperties = VkFormatProperties.callocStack(stack);
+                vkGetPhysicalDeviceFormatProperties(physicalDevice, swapChainImageFormat,
+                        formatProperties);
+                int blit = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+                if ((formatProperties.optimalTilingFeatures() & blit) != blit) {
+                    offscreenScaling = false;
+                    Initializer.LOGGER.warn("[RenderScale] swap chain format 0x{} cannot be "
+                            + "blitted; rendering at native resolution",
+                            Integer.toHexString(swapChainImageFormat));
+                }
+            }
+        }
+
+        updateRenderExtent();
+
+        int percent = net.vulkanmod.config.VulkanModConfig.RENDER_SCALE.number;
+        Initializer.LOGGER.info("[RenderScale] {}% -> {}x{} (window {}x{}){}",
+                percent, renderWidth, renderHeight,
+                swapChainExtent.width(), swapChainExtent.height(),
+                offscreenScaling ? "" : " (direct to swap chain)");
+    }
+
+    /** Reads the persisted setting; must run before the swap chain is created. */
+    private static void readRenderScaleSetting() {
+        offscreenScaling = net.vulkanmod.config.VulkanModConfig.RENDER_SCALE.number < 100;
+    }
+    private static void updateRenderExtent() {
+        if (!offscreenScaling) {
+            renderWidth = swapChainExtent.width();
+            renderHeight = swapChainExtent.height();
+            return;
+        }
+
+        int percent = net.vulkanmod.config.VulkanModConfig.RENDER_SCALE.number;
+        renderWidth = Math.max(1, (swapChainExtent.width() * percent + 50) / 100);
+        renderHeight = Math.max(1, (swapChainExtent.height() * percent + 50) / 100);
     }
 
     private static void createStagingBuffers() {
@@ -267,16 +340,22 @@ public class Vulkan {
 //        vkDeviceWaitIdle(device);
         createSwapChain();
 
+        // The scale percentage is fixed for the session, but a resize still changes the pixel
+        // dimensions of the target.
+        updateRenderExtent();
+
         swapChainFramebuffers.forEach(framebuffer -> vkDestroyFramebuffer(device, framebuffer, null));
 
 //        swapChainImageViews.forEach(imageView -> vkDestroyImageView(device, imageView, null));
 
         destroyDepthResources();
+        destroyOffscreenColorResources();
 
 //        vkDestroySwapchainKHR(device, swapChain, null);
 
 //        createSwapChain();
         createImageViews();
+        createOffscreenColorResources();
         createDepthResources();
         createFramebuffers();
     }
@@ -642,6 +721,24 @@ public class Vulkan {
             int presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
             VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
 
+            // A scaled frame is copied into the swap chain image, so the surface has to accept
+            // that usage. The capability is ubiquitous in practice, but falling back to direct
+            // rendering is cheaper than failing to create the swap chain on a driver that omits
+            // it.
+            if (renderPass == 0 && offscreenScaling
+                    && (swapChainSupport.capabilities.supportedUsageFlags()
+                        & VK_IMAGE_USAGE_TRANSFER_DST_BIT) == 0) {
+                offscreenScaling = false;
+                Initializer.LOGGER.warn("[RenderScale] swap chain does not support TRANSFER_DST; "
+                        + "rendering at native resolution");
+            }
+
+            Initializer.LOGGER.info("[Swapchain] present modes [{}] -> {} (vsync option: {})",
+                    describePresentModes(swapChainSupport.presentModes), presentModeName(presentMode), vsync);
+            if (!vsync && presentMode == VK_PRESENT_MODE_FIFO_KHR) {
+                Initializer.LOGGER.warn("[Swapchain] surface exposes neither MAILBOX nor IMMEDIATE; FIFO presentation caps the frame rate to the display refresh rate");
+            }
+
             // Some Android drivers require more than three swap chain images
             // (minImageCount can be 4 or higher), so never ask for fewer than
             // the surface reports and still respect maxImageCount.
@@ -666,7 +763,9 @@ public class Vulkan {
             createInfo.imageColorSpace(surfaceFormat.colorSpace());
             createInfo.imageExtent(extent);
             createInfo.imageArrayLayers(1);
-            createInfo.imageUsage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+            createInfo.imageUsage(offscreenScaling
+                    ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                    : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 
             QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
@@ -737,7 +836,11 @@ public class Vulkan {
             colorAttachment.stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE);
             colorAttachment.stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
             colorAttachment.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
-            colorAttachment.finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            // With a render scale the color attachment is the offscreen image, so the pass ends
+            // in the layout the blit reads. Otherwise it goes straight to presentation.
+            colorAttachment.finalLayout(offscreenScaling
+                    ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                    : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
             int y = attachments.get(0).samples();
 
@@ -813,7 +916,7 @@ public class Vulkan {
 
                 // SAMPLED so the hierarchical-Z reduction can read the finished depth buffer.
                 MemoryManager.createImage(
-                        swapChainExtent.width(), swapChainExtent.height(), 1,
+                        renderWidth, renderHeight, 1,
                         depthFormat,
                         VK_IMAGE_TILING_OPTIMAL,
                         // SAMPLED is only declared when the HZB is actually going to sample it.
@@ -847,6 +950,137 @@ public class Vulkan {
         depthImages = new long[0];
         depthImageMemories = new long[0];
         depthImageViews = new long[0];
+    }
+
+    /**
+     * Creates one scaled color target per swap chain image.
+     *
+     * <p>Per image, not shared: with frames in flight the blit of frame N can still be reading
+     * the target while frame N+1 starts writing it. Tying each target to a swap chain image means
+     * re-acquiring that image proves the previous blit has been presented, which is the same
+     * argument the depth attachments already rely on.
+     *
+     * <p>No layout transition is recorded here. The render pass declares UNDEFINED as the initial
+     * layout and clears the attachment, so the first use establishes the layout for free.
+     */
+    private static void createOffscreenColorResources() {
+        if (!offscreenScaling) return;
+
+        int count = swapChainImageViews.size();
+        offscreenColorImages = new long[count];
+        offscreenColorMemories = new long[count];
+        offscreenColorViews = new long[count];
+
+        for (int i = 0; i < count; i++) {
+            try (MemoryStack stack = stackPush()) {
+                LongBuffer pImage = stack.callocLong(1);
+                PointerBuffer pMemory = stack.callocPointer(1);
+
+                MemoryManager.createImage(
+                        renderWidth, renderHeight, 1,
+                        swapChainImageFormat,
+                        VK_IMAGE_TILING_OPTIMAL,
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                        pImage,
+                        pMemory);
+
+                offscreenColorImages[i] = pImage.get(0);
+                offscreenColorMemories[i] = pMemory.get(0);
+                offscreenColorViews[i] = createImageView(offscreenColorImages[i],
+                        swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+            }
+        }
+    }
+
+    private static void destroyOffscreenColorResources() {
+        for (int i = 0; i < offscreenColorImages.length; i++) {
+            MemoryManager.freeImage(offscreenColorImages[i], offscreenColorMemories[i]);
+            vkDestroyImageView(device, offscreenColorViews[i], null);
+        }
+        offscreenColorImages = new long[0];
+        offscreenColorMemories = new long[0];
+        offscreenColorViews = new long[0];
+    }
+
+    /**
+     * Records the scale-up from the offscreen target into the acquired swap chain image.
+     *
+     * <p>The render pass leaves the target in TRANSFER_SRC_OPTIMAL. The swap chain image is
+     * treated as UNDEFINED because every frame clears the target anyway, so whatever the
+     * presentation engine left behind is irrelevant. The final barrier hands the image to the
+     * present engine in PRESENT_SRC_KHR, which is the layout the old direct render pass used to
+     * produce on its own.
+     */
+    public static void blitOffscreenToSwapchain(VkCommandBuffer commandBuffer, int imageIndex) {
+        if (!offscreenScaling || imageIndex < 0 || imageIndex >= offscreenColorImages.length) return;
+
+        long srcImage = offscreenColorImages[imageIndex];
+        long dstImage = swapChainImages.get(imageIndex);
+
+        // Make the color writes visible to the transfer read. The render pass already moved the
+        // image to TRANSFER_SRC_OPTIMAL; this barrier is for the memory dependency, not layout.
+        recordColorBarrier(commandBuffer, srcImage,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+
+        recordColorBarrier(commandBuffer, dstImage,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+
+        try (MemoryStack stack = stackPush()) {
+            VkImageBlit.Buffer region = VkImageBlit.callocStack(1, stack);
+            region.srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+            region.srcSubresource().mipLevel(0);
+            region.srcSubresource().baseArrayLayer(0);
+            region.srcSubresource().layerCount(1);
+            region.srcOffsets(0, VkOffset3D.callocStack(stack).set(0, 0, 0));
+            region.srcOffsets(1, VkOffset3D.callocStack(stack).set(renderWidth, renderHeight, 1));
+            region.dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+            region.dstSubresource().mipLevel(0);
+            region.dstSubresource().baseArrayLayer(0);
+            region.dstSubresource().layerCount(1);
+            region.dstOffsets(0, VkOffset3D.callocStack(stack).set(0, 0, 0));
+            region.dstOffsets(1, VkOffset3D.callocStack(stack)
+                    .set(swapChainExtent.width(), swapChainExtent.height(), 1));
+
+            vkCmdBlitImage(commandBuffer,
+                    srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    region, VK_FILTER_LINEAR);
+        }
+
+        recordColorBarrier(commandBuffer, dstImage,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0);
+    }
+
+    private static void recordColorBarrier(VkCommandBuffer commandBuffer, long image,
+                                           int oldLayout, int newLayout,
+                                           int srcStage, int srcAccess,
+                                           int dstStage, int dstAccess) {
+        try (MemoryStack stack = stackPush()) {
+            VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.callocStack(1, stack);
+            barrier.sType(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
+            barrier.oldLayout(oldLayout);
+            barrier.newLayout(newLayout);
+            barrier.srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            barrier.dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            barrier.image(image);
+            barrier.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+            barrier.subresourceRange().baseMipLevel(0);
+            barrier.subresourceRange().levelCount(1);
+            barrier.subresourceRange().baseArrayLayer(0);
+            barrier.subresourceRange().layerCount(1);
+            barrier.srcAccessMask(srcAccess);
+            barrier.dstAccessMask(dstAccess);
+
+            vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0,
+                    null, null, barrier);
+        }
     }
 
     private static int findSupportedFormat(IntBuffer formatCandidates, int tiling, int features) {
@@ -913,6 +1147,25 @@ public class Vulkan {
         if (hasImmediate) return VK_PRESENT_MODE_IMMEDIATE_KHR;
         return VK_PRESENT_MODE_FIFO_KHR;
     }
+
+    private static String presentModeName(int mode) {
+        switch (mode) {
+            case VK_PRESENT_MODE_IMMEDIATE_KHR: return "IMMEDIATE";
+            case VK_PRESENT_MODE_MAILBOX_KHR: return "MAILBOX";
+            case VK_PRESENT_MODE_FIFO_KHR: return "FIFO";
+            default: return "mode " + mode;
+        }
+    }
+
+    private static String describePresentModes(IntBuffer modes) {
+        if (modes == null) return "none";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < modes.capacity(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(presentModeName(modes.get(i)));
+        }
+        return sb.toString();
+    }
     private static VkExtent2D chooseSwapExtent(VkSurfaceCapabilitiesKHR capabilities) {
 
         if(capabilities.currentExtent().width() != UINT32_MAX) {
@@ -965,9 +1218,9 @@ public class Vulkan {
     public static VkViewport.Buffer viewport(MemoryStack stack) {
         VkViewport.Buffer viewport = VkViewport.callocStack(1, stack);
         viewport.x(0.0f);
-        viewport.y(swapChainExtent.height());
-        viewport.width(swapChainExtent.width());
-        viewport.height(-swapChainExtent.height());
+        viewport.y(renderHeight);
+        viewport.width(renderWidth);
+        viewport.height(-renderHeight);
         viewport.minDepth(0.0f);
         viewport.maxDepth(1.0f);
 
@@ -976,7 +1229,7 @@ public class Vulkan {
     public static VkRect2D.Buffer scissor(MemoryStack stack) {
         VkRect2D.Buffer scissor = VkRect2D.callocStack(1, stack);
         scissor.offset(VkOffset2D.callocStack(stack).set(0, 0));
-        scissor.extent(swapChainExtent);
+        scissor.extent(VkExtent2D.callocStack(stack).width(renderWidth).height(renderHeight));
 
         return scissor;
     }
@@ -995,12 +1248,14 @@ public class Vulkan {
             VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.callocStack(stack);
             framebufferInfo.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
             framebufferInfo.renderPass(renderPass);
-            framebufferInfo.width(swapChainExtent.width());
-            framebufferInfo.height(swapChainExtent.height());
+            framebufferInfo.width(renderWidth);
+            framebufferInfo.height(renderHeight);
             framebufferInfo.layers(1);
 
             for(int fbIndex = 0; fbIndex < swapChainImageViews.size(); fbIndex++) {
-                long imageView = swapChainImageViews.get(fbIndex);
+                long imageView = offscreenScaling
+                        ? offscreenColorViews[fbIndex]
+                        : swapChainImageViews.get(fbIndex);
 
                 attachments.put(0, imageView);
                 attachments.put(1, depthImageViews[fbIndex]);

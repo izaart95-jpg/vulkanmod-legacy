@@ -24,7 +24,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 @Mixin(net.minecraft.client.render.VertexBuffer.class)
-public class VertexBufferMixin {
+public class VertexBufferMixin implements net.vulkanmod.vulkan.render.ChunkDrawable {
 
     @Shadow private int size;
     @Shadow private VertexFormat format;
@@ -49,7 +49,7 @@ public class VertexBufferMixin {
     @Unique private ByteBuffer capturedVertexData;
     @Unique private int capturedVertexCount;
 
-    @Inject(method = "data", at = @At("HEAD"))
+    @Inject(method = "data", at = @At("HEAD"), cancellable = true)
     private void onData(ByteBuffer buffer, CallbackInfo ci) {
         if (buffer == null || buffer.remaining() <= 0) return;
 
@@ -111,6 +111,14 @@ public class VertexBufferMixin {
         persistentVertexCount = vertexCount;
 
         buffer.position(pos);
+
+        // The mesh now lives in the Vulkan arena. Letting the original run would bind this
+        // VertexBuffer and glBufferData the whole mesh through gl4es on Android, where every
+        // GL call crosses the JNI/GLES translation layer -- and drawing is intercepted, so the
+        // resulting GL buffer is never read. Keep the vanilla size field in sync because other
+        // code still uses it as the section's vertex count.
+        this.size = vertexCount;
+        ci.cancel();
     }
 
     @Unique private static final int COMPRESSED_STRIDE = 16;
@@ -194,6 +202,13 @@ public class VertexBufferMixin {
 
     @Unique
     private static short packPos(float v) {
+        // Vanilla scales every section by 1.000001 around its own origin
+        // (BuiltChunk.method_10169 applies the matrix captured by method_10174). That tiny
+        // expansion closes the hairline cracks that otherwise appear between neighbouring
+        // sections at some camera angles. Folding it in here is exact and costs nothing at
+        // draw time; skipping it is only invisible until it is not.
+        v = v * 1.000001f - 0.000008f;
+
         // (v + POS_OFFSET) * SCALE, i.e. (v - 4) * 2048. The bias is subtracted, not added:
         // adding it pushed a chunk's [0,16] range up to [8192, 40960], overflowing the signed
         // short above v = 12 and clamping everything higher, which tore the geometry apart.
@@ -348,6 +363,32 @@ public class VertexBufferMixin {
 
         // Leave the offset at zero so any non-terrain draw sharing this pipeline is unaffected.
         if (chunkOffsetPath) VRenderSystem.clearChunkOffset();
+    }
+
+    @Unique
+    @Override
+    public int vulkanmod$chunkDrawState() {
+        if (persistentVertexCount <= 0) {
+            // Captured data that has not reached the GPU yet must not be treated as empty:
+            // the vanilla path uploads it on the first draw.
+            return capturedVertexCount > 0 ? STATE_NOT_CHUNK : STATE_EMPTY;
+        }
+        if (arenaSlot != null && compressed) return STATE_DRAWABLE;
+        return STATE_NOT_CHUNK;
+    }
+
+    @Unique
+    @Override
+    public void vulkanmod$drawChunk(float offsetX, float offsetY, float offsetZ) {
+        if (arenaSlot == null || !compressed || persistentVertexCount <= 0) return;
+
+        Drawer drawer = Drawer.getInstance();
+        if (!drawer.isRenderPassActive() || !drawer.isBatchingAvailable()) return;
+
+        // The caller has already selected the compressed-terrain pipeline and synced the
+        // layer's textures once, so nothing here touches GL state or the texture cache.
+        drawer.drawChunkBatched(arenaSlot, persistentVertexCount, this.format,
+                offsetX, offsetY, offsetZ);
     }
 
     @Inject(method = "delete", at = @At("HEAD"))

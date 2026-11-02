@@ -30,6 +30,15 @@ public class AutoWorldMixin {
      * another run at a different size -- and a small window flatters the numbers badly.
      */
     @Unique private static final String WINDOW_SIZE = System.getProperty("vulkanmod.window", "");
+    /** Test-only: render the player in third person so the model (and its hurt flash) is visible. */
+    @Unique private static final boolean THIRD_PERSON = Boolean.getBoolean("vulkanmod.thirdperson");
+    /** Test-only: force a full-strength hurt flash on the player every frame. */
+    @Unique private static final boolean HURT_TEST = Boolean.getBoolean("vulkanmod.hurttest");
+    /** Camera pitch for the test pose; negative looks up at the cloud layer. */
+    @Unique private static final float CAMERA_PITCH = vulkanmod$floatProperty("vulkanmod.pitch", 5.0f);
+    @Unique private static final float CAMERA_YAW = vulkanmod$floatProperty("vulkanmod.yaw", 45.0f);
+    /** Optional fixed camera height, for cloud/sky screenshots above the tree line. */
+    @Unique private static final float CAMERA_Y = vulkanmod$floatProperty("vulkanmod.y", Float.NaN);
     @Unique private static boolean vulkanmod$resized = false;
     @Unique private static int vulkanmod$ticks = 0;
     @Unique private static boolean vulkanmod$started = false;
@@ -48,7 +57,7 @@ public class AutoWorldMixin {
         vulkanmod$forceWindowSize();
         Initializer.LOGGER.warn("[AutoWorld] starting a flat test world");
         client.startIntegratedServer("vulkanmod_test", "vulkanmod_test",
-                new LevelInfo(12345L, LevelInfo.GameMode.CREATIVE, false, false, LevelGeneratorType.DEFAULT));
+                new LevelInfo(12345L, LevelInfo.GameMode.CREATIVE, false, false, LevelGeneratorType.FLAT));
     }
 
     /**
@@ -71,8 +80,44 @@ public class AutoWorldMixin {
         // input poll or a physics tick, and two runs whose camera differs by a few degrees are
         // not an A/B of anything.
         client.world.setTimeOfDay(6000L);   // noon
-        client.player.pitch = 5.0f;         // just below the horizon
-        client.player.yaw = 45.0f;
+        client.player.pitch = CAMERA_PITCH;
+        client.player.yaw = CAMERA_YAW;
+        if (THIRD_PERSON) {
+            // Third person back. Re-applied every frame so the input poll cannot undo it.
+            client.options.perspective = 1;
+        }
+        if (HURT_TEST) {
+            // LivingEntityRenderer.method_10252 reads hurtTime every frame; keeping it at the
+            // vanilla damage value keeps the flash on for the whole screenshot window.
+            client.player.hurtTime = 10;
+            client.player.deathTime = 0;
+        }
+        // Fly rather than fall: a fixed camera height is the whole point of the pose, and the
+        // integrated server rejects large position deltas unless the player is flying.
+        client.player.abilities.flying = true;
+        client.player.abilities.allowFlying = true;
+        client.player.fallDistance = 0.0f;
+        if (!Float.isNaN(CAMERA_Y)) {
+            double y = CAMERA_Y;
+            client.player.updatePosition(client.player.x, y, client.player.z);
+            client.player.prevX = client.player.x;
+            client.player.prevY = y;
+            client.player.prevZ = client.player.z;
+            client.player.prevTickX = client.player.x;
+            client.player.prevTickY = y;
+            client.player.prevTickZ = client.player.z;
+            client.player.setVelocityClient(0.0, 0.0, 0.0);
+        }
+    }
+
+    @Unique
+    private static float vulkanmod$floatProperty(String name, float fallback) {
+        try {
+            String value = System.getProperty(name);
+            return value == null ? fallback : Float.parseFloat(value);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     @Unique

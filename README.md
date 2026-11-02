@@ -24,6 +24,17 @@ LWJGL2-facing APIs that Minecraft 1.8.9 actually has.
   No platform-specific jar is needed.
 - Works on Java 8 and newer (the jar is compiled to Java 8 bytecode).
 
+## Status and performance
+
+The 1.8.9 backport is now considered complete and playable on desktop Fabric,
+MJLauncher and Android/Pojav. Mob hurt/death flashes and the creeper fuse flash
+match vanilla 1.8.9 again.
+
+The FPS gain is real but modest rather than dramatic. Normal scenes are still
+partly GPU-bound, and further optimisation of mesh upload, draw submission and
+culling is possible. That work is deliberately left for a future pass; for now
+this branch is finished and playable.
+
 ## Requirements
 
 - Minecraft **1.8.9**
@@ -37,7 +48,10 @@ No Fabric API is required.
 ## Installation
 
 1. Install Fabric Loader for Minecraft 1.8.9.
-2. Put `VulkanMod-0.6.8+1.8.9.jar` into `.minecraft/mods`.
+2. Put the jar for your launcher into `.minecraft/mods`:
+   - desktop Fabric: `VulkanMod-0.6.8+1.8.9.jar`
+   - MJLauncher: `VulkanMod-0.6.8+1.8.9-mjlauncher.jar`
+   - Android/Pojav: `VulkanMod-0.6.8+1.8.9-android.jar`
 3. Start the game with the Fabric profile.
 
 If Vulkan is unavailable, the renderer logs a clear diagnostic and the game keeps
@@ -52,9 +66,17 @@ targets Java 8.
 ./gradlew build
 ```
 
-The installable, remapped and self-contained jar is written to
-`build/libs/VulkanMod-0.6.8+1.8.9.jar`. `build` depends on the shadow/remap tasks,
-so no separate `build.sh` invocation is needed.
+`build` depends on the shadow/remap tasks, so no separate `build.sh` invocation
+is needed. It produces three installable jars:
+
+| Jar | Target |
+| --- | --- |
+| `VulkanMod-0.6.8+1.8.9.jar` | Desktop Fabric; self-contained with universal natives |
+| `VulkanMod-0.6.8+1.8.9-mjlauncher.jar` | MJLauncher |
+| `VulkanMod-0.6.8+1.8.9-android.jar` | Android / Pojav |
+
+The renderer is identical in all three; only the bundled LWJGL/native layer
+differs to match the launcher.
 
 ## Differences from the 1.21 version
 

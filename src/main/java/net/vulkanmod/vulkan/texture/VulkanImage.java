@@ -27,9 +27,9 @@ public class VulkanImage {
     private long allocation;
     private long textureImageView;
 
-    // Sampler cache: mask is 2 bits (blur|mipmap<<1), max 4 entries.
+    // Sampler cache: mask is 3 bits (blur|mipmap<<1|clamp<<2), max 8 entries.
     // Array lookup is ~10x faster than HashMap<Byte,Long> boxing+hashing.
-    private long[] samplersByMask = new long[4];
+    private long[] samplersByMask = new long[8];
     private long textureSampler;
 
     private int mipLevels;
@@ -554,13 +554,13 @@ public class VulkanImage {
 
             textureSampler = pTextureSampler.get(0);
 
-            int mask = (blur ? 1 : 0) | (mipmap ? 2 : 0);
+            int mask = (blur ? 1 : 0) | (mipmap ? 2 : 0) | (clamp ? 4 : 0);
             samplersByMask[mask] = textureSampler;
         }
     }
 
     public void updateTextureSampler(boolean blur, boolean clamp, boolean mipmap) {
-        int mask = (blur ? 1 : 0) | (mipmap ? 2 : 0);
+        int mask = (blur ? 1 : 0) | (mipmap ? 2 : 0) | (clamp ? 4 : 0);
         long sampler = samplersByMask[mask];
 
         if(sampler == 0L) createTextureSampler(blur, clamp, mipmap);

@@ -35,6 +35,8 @@ public class PipelineManager {
 
     private Pipeline compressedTerrainPipeline;
     private boolean compressedTerrainFailed = false;
+    private Pipeline compressedTerrainOpaquePipeline;
+    private boolean compressedTerrainOpaqueFailed = false;
 
     /**
      * Pipeline for terrain rebuilt into the 16-byte layout. Terrain is the biggest vertex stream
@@ -53,6 +55,29 @@ public class PipelineManager {
                     + "falling back to Minecraft's vertex layout", e);
         }
         return compressedTerrainPipeline;
+    }
+
+    /**
+     * SOLID terrain variant: no alpha cutout, so the fragment shader can declare early fragment
+     * tests and the GPU rejects hidden blocks before sampling the texture and lightmap.
+     */
+    public Pipeline getCompressedTerrainOpaquePipeline() {
+        if (!COMPRESS_TERRAIN || compressedTerrainOpaqueFailed) {
+            return getCompressedTerrainPipeline();
+        }
+        if (compressedTerrainOpaquePipeline != null) return compressedTerrainOpaquePipeline;
+
+        try {
+            compressedTerrainOpaquePipeline = new Pipeline(null, "core/terrain_compressed_opaque");
+            Initializer.LOGGER.info("Created opaque compressed terrain pipeline (early depth tests)");
+        } catch (Exception e) {
+            compressedTerrainOpaqueFailed = true;
+            Initializer.LOGGER.error("Failed to create the opaque terrain pipeline; "
+                    + "falling back to alpha-tested terrain", e);
+        }
+        return compressedTerrainOpaquePipeline != null
+                ? compressedTerrainOpaquePipeline
+                : getCompressedTerrainPipeline();
     }
 
     public Pipeline getPipelineForFormat(VertexFormat format) {

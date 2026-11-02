@@ -9,8 +9,8 @@
  */
 package org.lwjgl.util.glu;
 
+import com.mojang.blaze3d.platform.GlStateManager;
 import org.lwjgl.BufferUtils;
-import org.lwjgl.opengl.GL11;
 
 import java.nio.FloatBuffer;
 
@@ -21,6 +21,10 @@ public final class Project {
 
     /**
      * Multiplies the current matrix by a perspective projection matrix.
+     *
+     * <p>Goes through {@link GlStateManager} rather than a raw {@code glMultMatrixf} call so the
+     * software matrix stack sees the projection. Once the Vulkan renderer is up, GL's own matrix
+     * stack is not used for anything, and this is the only projection helper in the game.
      *
      * @param fovy   field of view in degrees, in the y direction
      * @param aspect aspect ratio (width / height)
@@ -48,6 +52,6 @@ public final class Project {
 
         FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
         buffer.put(m).flip();
-        GL11.glMultMatrixf(buffer);
+        GlStateManager.multiMatrix(buffer);
     }
 }

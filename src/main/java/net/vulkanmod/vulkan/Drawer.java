@@ -228,7 +228,7 @@ public class Drawer {
             // resize(), not init(): the extent here is the real one, while the extent at startup
             // is the default window size. A pyramid built for that covered a corner of the screen.
             net.vulkanmod.vulkan.compute.HZBCulling.getInstance()
-                    .resize(getSwapchainExtent().width(), getSwapchainExtent().height());
+                    .resize(Vulkan.getRenderWidth(), Vulkan.getRenderHeight());
             hzbPass.prepare(MAX_FRAMES_IN_FLIGHT);
         }
 
@@ -612,7 +612,9 @@ public class Drawer {
 
             VkRect2D renderArea = VkRect2D.callocStack(stack);
             renderArea.offset(VkOffset2D.callocStack(stack).set(0, 0));
-            renderArea.extent(getSwapchainExtent());
+            renderArea.extent(VkExtent2D.callocStack(stack)
+                    .width(Vulkan.getRenderWidth())
+                    .height(Vulkan.getRenderHeight()));
             renderPassInfo.renderArea(renderArea);
 
             VkClearValue.Buffer clearValues = VkClearValue.callocStack(2, stack);
@@ -675,6 +677,10 @@ public class Drawer {
         VkCommandBuffer commandBuffer = commandBuffers.get(imageIndex);
 
         vkCmdEndRenderPass(commandBuffer);
+
+        // When rendering below native resolution, the finished frame lives in the offscreen
+        // target. Stretch it over the acquired swap chain image before the buffer is closed.
+        Vulkan.blitOffscreenToSwapchain(commandBuffer, imageIndex);
 
         PerformanceProfiler.endGpuFrame(commandBuffer, currentFrame);
 
@@ -804,7 +810,8 @@ public class Drawer {
             submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO);
             submitInfo.waitSemaphoreCount(1);
             submitInfo.pWaitSemaphores(stack.longs(imageAvailableSemaphores.get(currentFrame)));
-            submitInfo.pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
+            submitInfo.pWaitDstStageMask(stack.ints(
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT));
             submitInfo.pSignalSemaphores(stack.longs(renderFinishedSemaphores.get(currentFrame)));
 
             // The occlusion pass has to run before the frame's indirect draws read the commands
@@ -899,7 +906,7 @@ public class Drawer {
             // resize(), not init(): the extent here is the real one, while the extent at startup
             // is the default window size. A pyramid built for that covered a corner of the screen.
             net.vulkanmod.vulkan.compute.HZBCulling.getInstance()
-                    .resize(getSwapchainExtent().width(), getSwapchainExtent().height());
+                    .resize(Vulkan.getRenderWidth(), Vulkan.getRenderHeight());
             hzbPass.prepare(MAX_FRAMES_IN_FLIGHT);
         }
 
@@ -974,7 +981,11 @@ public class Drawer {
 
         if (!appendToBatch(pipeline, slot.getBuffer(), ib, vertexCount / 4 * 6, 0, slot.baseVertex,
                 offsetX, offsetY, offsetZ)) {
+            // Batch storage exhausted this frame. Draw immediately, but the shader reads the
+            // chunk translation from the push constant in this path, so install it first.
+            VRenderSystem.setChunkOffset(offsetX, offsetY, offsetZ);
             drawArenaDirect(pipeline, slot.getBuffer(), ib, vertexCount / 4 * 6, slot.baseVertex);
+            VRenderSystem.clearChunkOffset();
         }
         currentIndex++;
     }
@@ -1387,7 +1398,9 @@ public class Drawer {
 
             VkRect2D renderArea = VkRect2D.callocStack(stack);
             renderArea.offset(VkOffset2D.callocStack(stack).set(0, 0));
-            renderArea.extent(getSwapchainExtent());
+            renderArea.extent(VkExtent2D.callocStack(stack)
+                    .width(Vulkan.getRenderWidth())
+                    .height(Vulkan.getRenderHeight()));
 
             VkClearRect.Buffer pRect = VkClearRect.callocStack(1, stack);
             pRect.get(0).rect(renderArea);
@@ -1398,6 +1411,22 @@ public class Drawer {
     }
 
     public static void setViewport(int x, int y, int width, int height) {
+        // The game works in window pixels; with a render scale the target is smaller. Every
+        // logical viewport (the world, the panorama's 256x256 square, the enchanting preview)
+        // has to shrink with it, or the image is cropped instead of scaled.
+        if (Vulkan.isOffscreenScaling() && Vulkan.getRenderWidth() > 0) {
+            int screenW = VRenderSystem.getScreenWidth();
+            int screenH = VRenderSystem.getScreenHeight();
+            if (screenW > 0 && screenH > 0) {
+                float sx = Vulkan.getRenderWidth() / (float) screenW;
+                float sy = Vulkan.getRenderHeight() / (float) screenH;
+                x = Math.round(x * sx);
+                y = Math.round(y * sy);
+                width = Math.max(1, Math.round(width * sx));
+                height = Math.max(1, Math.round(height * sy));
+            }
+        }
+
         try (MemoryStack stack = stackPush()) {
             VkViewport.Buffer viewport = VkViewport.callocStack(1, stack);
             viewport.x(x);

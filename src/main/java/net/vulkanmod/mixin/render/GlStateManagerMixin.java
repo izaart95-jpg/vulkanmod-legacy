@@ -125,13 +125,32 @@ public class GlStateManagerMixin {
 
     // === Clear ===
 
-    @Inject(method = "clearColor(FFFF)V", at = @At("RETURN"))
+    // Once Vulkan owns the frame the default GL framebuffer is never presented, and the world
+    // and GUI framebuffers it clears are never sampled. Minecraft still issues two or three
+    // full-framebuffer glClear calls per frame (MinecraftClient.runGameLoop,
+    // GameRenderer.renderWorld and setupHudMatrixMode), which on gl4es means translating and
+    // queuing work the driver then throws away. Mirror the state into VRenderSystem, record the
+    // equivalent vkCmdClearAttachments, and skip the GL call entirely.
+    //
+    // Before vulkanReady the calls still run: the loading screen is drawn through real GL.
+    // When no Vulkan render pass is active clearAttachments() is a no-op, and the next render
+    // pass begins with LOAD_OP_CLEAR, so skipping the GL clear cannot leave stale pixels.
+
+    @Inject(method = "clearColor(FFFF)V", at = @At("HEAD"), cancellable = true)
     private static void onClearColor(float r, float g, float b, float a, CallbackInfo ci) {
         if (!Initializer.vulkanReady) return;
         VRenderSystem.clearColor(r, g, b, a);
+        ci.cancel();
     }
 
-    @Inject(method = "clear", at = @At("RETURN"))
+    @Inject(method = "clearDepth(D)V", at = @At("HEAD"), cancellable = true)
+    private static void onClearDepth(double depth, CallbackInfo ci) {
+        if (!Initializer.vulkanReady) return;
+        VRenderSystem.clearDepth = (float) depth;
+        ci.cancel();
+    }
+
+    @Inject(method = "clear", at = @At("HEAD"), cancellable = true)
     private static void onClear(int mask, CallbackInfo ci) {
         if (!Initializer.vulkanReady) return;
         try {
@@ -139,6 +158,7 @@ public class GlStateManagerMixin {
         } catch (Exception e) {
             // Render pass may not be active yet
         }
+        ci.cancel();
     }
 
     // === Viewport ===
@@ -202,72 +222,114 @@ public class GlStateManagerMixin {
 
     // === Matrix Stack (eliminates glGetFloatv GPU-CPU sync) ===
     //
-    // These hooks deliberately do NOT check Initializer.vulkanReady, unlike every other hook in
-    // this class. The software matrix stack has to shadow GL's from the very first call, because
-    // what matters is not just the current matrix but the *depth* of the stack: vulkanReady only
-    // flips after initializeGame has already rendered the loading screen and the resource
-    // reload, and any pushMatrix that happened before the flip whose popMatrix lands after it
-    // leaves our stack permanently offset from GL's. From then on every pop restores a matrix
-    // saved at the wrong nesting level.
+    // These hooks deliberately do NOT check Initializer.vulkanReady before mirroring, unlike
+    // every other hook in this class. The software matrix stack has to shadow GL's from the very
+    // first call, because what matters is not just the current matrix but the *depth* of the
+    // stack: vulkanReady only flips after initializeGame has already rendered the loading screen
+    // and the resource reload, and any pushMatrix that happened before the flip whose popMatrix
+    // lands after it leaves our stack permanently offset from GL's. From then on every pop
+    // restores a matrix saved at the wrong nesting level.
     //
-    // That offset is why the per-chunk glGetFloatv was load bearing: it was re-seeding the
-    // matrix on every chunk draw and hiding the desync. Mirroring unconditionally is the fix;
-    // VRenderSystem's matrix code is plain JOML arithmetic and needs no Vulkan device.
+    // The mirror is the source of truth once the renderer is up, so the GL entry points are
+    // cancelled outright. On Android each of these crosses gl4es; entity parts and GUI widgets
+    // alone issue hundreds of them per frame. Before vulkanReady the real call still runs so the
+    // loading screen keeps rendering.
+    //
+    // Everything that mutates a matrix goes through GlStateManager in 1.8.9. The one exception,
+    // Project.gluPerspective's direct glMultMatrixf, now calls GlStateManager.multMatrix too.
 
-    @Inject(method = "matrixMode", at = @At("RETURN"))
+    /** Shared tail: mirror first, then skip the GL call once the renderer owns the state. */
+    private static void vulkanmodMatrixHook(CallbackInfo ci) {
+        if (Initializer.vulkanReady) ci.cancel();
+    }
+
+    @Inject(method = "matrixMode", at = @At("HEAD"), cancellable = true)
     private static void onMatrixMode(int mode, CallbackInfo ci) {
         VRenderSystem.matrixMode(mode);
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "pushMatrix", at = @At("RETURN"))
+    @Inject(method = "pushMatrix", at = @At("HEAD"), cancellable = true)
     private static void onPushMatrix(CallbackInfo ci) {
         VRenderSystem.pushMatrix();
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "popMatrix", at = @At("RETURN"))
+    @Inject(method = "popMatrix", at = @At("HEAD"), cancellable = true)
     private static void onPopMatrix(CallbackInfo ci) {
         VRenderSystem.popMatrix();
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "loadIdentity", at = @At("RETURN"))
+    @Inject(method = "loadIdentity", at = @At("HEAD"), cancellable = true)
     private static void onLoadIdentity(CallbackInfo ci) {
         VRenderSystem.loadIdentity();
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "translatef", at = @At("RETURN"))
+    @Inject(method = "translatef", at = @At("HEAD"), cancellable = true)
     private static void onTranslateF(float x, float y, float z, CallbackInfo ci) {
         VRenderSystem.translatef(x, y, z);
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "translated", at = @At("RETURN"))
+    @Inject(method = "translated", at = @At("HEAD"), cancellable = true)
     private static void onTranslateD(double x, double y, double z, CallbackInfo ci) {
         VRenderSystem.translatef((float) x, (float) y, (float) z);
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "rotatef", at = @At("RETURN"))
+    @Inject(method = "rotatef", at = @At("HEAD"), cancellable = true)
     private static void onRotate(float angle, float x, float y, float z, CallbackInfo ci) {
         VRenderSystem.rotatef(angle, x, y, z);
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "scalef", at = @At("RETURN"))
+    @Inject(method = "scalef", at = @At("HEAD"), cancellable = true)
     private static void onScaleF(float x, float y, float z, CallbackInfo ci) {
         VRenderSystem.scalef(x, y, z);
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "scaled", at = @At("RETURN"))
+    @Inject(method = "scaled", at = @At("HEAD"), cancellable = true)
     private static void onScaleD(double x, double y, double z, CallbackInfo ci) {
         VRenderSystem.scalef((float) x, (float) y, (float) z);
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "ortho", at = @At("RETURN"))
+    @Inject(method = "ortho", at = @At("HEAD"), cancellable = true)
     private static void onOrtho(double l, double r, double b, double t, double n, double f, CallbackInfo ci) {
         VRenderSystem.ortho(l, r, b, t, n, f);
+        vulkanmodMatrixHook(ci);
     }
 
-    @Inject(method = "multiMatrix", at = @At("RETURN"))
+    @Inject(method = "multiMatrix", at = @At("HEAD"), cancellable = true)
     private static void onMultiMatrix(FloatBuffer fb, CallbackInfo ci) {
         fb.rewind();
         VRenderSystem.multMatrix(fb);
+        vulkanmodMatrixHook(ci);
+    }
+
+    /**
+     * Serves the matrix getters from the software stack.
+     *
+     * <p>{@code Frustum.start} alone reads both matrices once per frame, and every terrain update
+     * (which includes pure camera rotation) constructs and starts a captured frustum as well.
+     * {@code Camera.update} reads them too, and {@code BuiltChunk} does so in the non-batched
+     * fallback. With the GL matrix calls cancelled these reads would see stale state, so they
+     * come from the same matrices the renderer uses.
+     */
+    @Inject(method = "getFloat", at = @At("HEAD"), cancellable = true)
+    private static void onGetFloat(int mode, FloatBuffer buffer, CallbackInfo ci) {
+        if (!Initializer.vulkanReady || !VRenderSystem.isSoftwareStackTrusted()) return;
+
+        if (mode == 2982) { // GL_MODELVIEW_MATRIX
+            VRenderSystem.writeModelView(buffer);
+            ci.cancel();
+        } else if (mode == 2983) { // GL_PROJECTION_MATRIX
+            VRenderSystem.writeProjection(buffer);
+            ci.cancel();
+        }
     }
 
     // === Fog ===
