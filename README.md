@@ -1,5 +1,10 @@
 # VulkanMod for Minecraft 1.8.9
 
+> **Fork:** This is [`vulkanmod-legacy`](https://github.com/izaart95-jpg/vulkanmod-legacy),
+> a fork of [xCollateral/VulkanMod](https://github.com/xCollateral/VulkanMod).
+> It combines the Minecraft 1.8.9 Legacy Fabric backport with Android/Pojav support
+> and Sodium-style rendering optimizations that also benefit desktop players.
+
 This branch is the **Fabric 1.8.9 backport of VulkanMod**. It keeps the goal of the
 original mod — replacing Minecraft's OpenGL renderer with a Vulkan renderer and
 optimising world/entity rendering — while using the rendering hooks and legacy
@@ -10,6 +15,7 @@ LWJGL2-facing APIs that Minecraft 1.8.9 actually has.
 - **Vulkan rendering backend** for terrain, entities, particles, the HUD and GUI.
 - **LWJGL3 migration layer** that keeps 1.8.9's LWJGL2-style calls working on top of
   GLFW/LWJGL3 (input, display, OpenAL and the legacy `GL11` convenience methods).
+- **Android/Pojav and MJLauncher support** through separate, self-contained jars.
 - **Terrain optimisations**: asynchronous chunk meshing, visible-first rebuild order,
   frustum culling, indirect draws and HZB/occlusion culling.
 - **Entity rendering optimisations**: instanced entity rendering and reduced draw
@@ -35,6 +41,17 @@ partly GPU-bound, and further optimisation of mesh upload, draw submission and
 culling is possible. That work is deliberately left for a future pass; for now
 this branch is finished and playable.
 
+## Download
+
+Grab the jar for your launcher from the
+[latest release](https://github.com/izaart95-jpg/vulkanmod-legacy/releases/latest):
+
+- desktop Fabric: `VulkanMod-0.6.8+1.8.9.jar`
+- MJLauncher: `VulkanMod-0.6.8+1.8.9-mjlauncher.jar`
+- Android/Pojav: `VulkanMod-0.6.8+1.8.9-android.jar`
+
+The release also includes a sources jar for development.
+
 ## Requirements
 
 - Minecraft **1.8.9**
@@ -47,12 +64,11 @@ No Fabric API is required.
 
 ## Installation
 
-1. Install Fabric Loader for Minecraft 1.8.9.
-2. Put the jar for your launcher into `.minecraft/mods`:
-   - desktop Fabric: `VulkanMod-0.6.8+1.8.9.jar`
-   - MJLauncher: `VulkanMod-0.6.8+1.8.9-mjlauncher.jar`
-   - Android/Pojav: `VulkanMod-0.6.8+1.8.9-android.jar`
-3. Start the game with the Fabric profile.
+1. Download the jar for your launcher from the
+   [latest release](https://github.com/izaart95-jpg/vulkanmod-legacy/releases/latest).
+2. Install Fabric Loader for Minecraft 1.8.9.
+3. Put the jar into `.minecraft/mods`.
+4. Start the game with the Fabric profile.
 
 If Vulkan is unavailable, the renderer logs a clear diagnostic and the game keeps
 running with the normal OpenGL path.
@@ -100,5 +116,8 @@ rendering/performance mod and does not alter world generation or server behaviou
 - Original VulkanMod by Collateral and contributors (LGPL-3.0).
 - Legacy LWJGL3 compatibility layer by Zarzelcow.
 - 1.8.9 Vulkan backport work by hopccne and contributors.
+- `vulkanmod-legacy` fork maintenance, Android/Pojav and MJLauncher support, and
+  additional rendering optimizations by Lelouch
+  ([izaart95-jpg](https://github.com/izaart95-jpg)).
 
 See `NOTICE` for details about the upstream backport this branch is based on.
